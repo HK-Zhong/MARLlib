@@ -147,6 +147,7 @@ class RLlibMPE(MultiAgentEnv):
             "space_obs": self.observation_space,
             "space_act": self.action_space,
             "num_agents": self.num_agents,
+            "agents": self.agents,
             "episode_limit": 25,
             "policy_mapping_info": policy_mapping_dict
         }

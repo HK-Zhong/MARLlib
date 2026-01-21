@@ -62,7 +62,7 @@ policy_mapping_dict = {
     },
 }
 
-# must inherited from MultiAgentEnv class
+# must be inherited from MultiAgentEnv class
 class RLlibMAGym(MultiAgentEnv):
 
     def __init__(self, env_config):
