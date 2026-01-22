@@ -1,0 +1,11 @@
+env: uwb_planning_env
+
+env_args:
+  map_name: "scenario1" # others can be found in mpe.py
+  continuous_actions: False
+  max_cycles: 25
+
+mask_flag: False
+global_state_flag: False
+opp_action_in_cc: True
+agent_level_batch_update: False
