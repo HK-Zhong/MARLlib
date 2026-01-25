@@ -88,8 +88,11 @@ class Agent(Entity):  # properties of agent entities
         # script behavior to execute
         self.action_callback = None
 
+        # agent perception range
+        self.perception_range = 30
 
-class World:  # multi-agent world
+
+class UWBPlanningWorld:  # multi-agent world
     def __init__(self, map_size_m=50.0, map_resolution_m=0.5):
         # -------------------------------
         # Original world attributes
@@ -114,7 +117,7 @@ class World:  # multi-agent world
         # -------------------------------
         # Grid map (square occupancy grid)
         # -------------------------------
-        self.map_size_m = float(map_size_m)              # map side length in meters
+        self.map_size_m = float(map_size_m)  # map side length in meters
         self.map_resolution_m = float(map_resolution_m)  # meters per grid cell
 
         self.grid_size = int(self.map_size_m / self.map_resolution_m)
@@ -128,9 +131,14 @@ class World:  # multi-agent world
 
         # UWB anchor grid locations (gx, gy) loaded from UWB_Anchors.yml
         self.uwb_locations = []
-        self.load_uwb_anchors()
         # obstacle grid locations loaded from YAML
         self.obstacles_grid = []
+
+        self.load_uwb_anchors()
+        self.load_obstacles("obstacles.yaml")
+
+        # 只需要初始化时更新一次即可，作为地图ground truth参与训练
+        self.update_edt()
 
     # =====================================================
     # EDT maintenance (derived from grid_map)
@@ -220,6 +228,55 @@ class World:  # multi-agent world
             self.uwb_locations.append((gx, gy))
 
         return self.uwb_locations
+
+        # =====================================================
+        # Obstacle loading (rectangle obstacles)
+        # =====================================================
+
+    def load_obstacles(self, obstacles_file):
+        """
+        Load rectangular obstacles from YAML and mark them in grid_map.
+
+        YAML format:
+          obstacles:
+            - id: rect_1
+              type: rectangle
+              corners: [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
+        Coordinates are REAL-WORLD (meters).
+        """
+        if not os.path.exists(obstacles_file):
+            return
+
+        with open(obstacles_file, "r") as f:
+            data = yaml.safe_load(f) or {}
+
+        obstacles = data.get("obstacles", [])
+        for obs in obstacles:
+            if obs.get("type", "") != "rectangle":
+                continue
+            corners = obs.get("corners", [])
+            if len(corners) != 4:
+                continue
+
+            # convert corners to grid coordinates
+            grid_corners = [self.to_grid(c[0], c[1]) for c in corners]
+            self._fill_rectangle(grid_corners)
+
+    def _fill_rectangle(self, grid_corners):
+        """
+        Fill a rectangle in grid_map given 4 grid corners.
+        """
+        xs = [c[0] for c in grid_corners]
+        ys = [c[1] for c in grid_corners]
+
+        min_x, max_x = min(xs), max(xs)
+        min_y, max_y = min(ys), max(ys)
+
+        for gx in range(min_x, max_x + 1):
+            for gy in range(min_y, max_y + 1):
+                if 0 <= gx < self.grid_size and 0 <= gy < self.grid_size:
+                    self.grid_map[gx, gy] = 1
+                    self.obstacles_grid.append((gx, gy))
 
     # return all entities in the world
     @property
@@ -323,49 +380,67 @@ class World:  # multi-agent world
         return [force_a, force_b]
 
     # =====================================================
-    # Obstacle loading (rectangle obstacles)
+    # UWB LOS query within agent perception range
     # =====================================================
-    def load_obstacles(self, obstacles_file):
+    def count_visible_uwb_anchors(self, agent_pos_real, perception_range):
         """
-        Load rectangular obstacles from YAML and mark them in grid_map.
+        Count how many UWB anchors are within the agent's perception range
+        AND have line-of-sight (LOS) to the agent.
 
-        YAML format:
-          obstacles:
-            - id: rect_1
-              type: rectangle
-              corners: [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
-        Coordinates are REAL-WORLD (meters).
+        Args:
+            agent_pos_real: (x, y) real-world position of the agent (meters)
+            perception_range: sensing radius (meters)
+
+        Returns:
+            int: number of anchors with LOS within perception range
         """
-        if not os.path.exists(obstacles_file):
-            return
+        ax, ay = agent_pos_real
+        agx, agy = self.to_grid(ax, ay)
 
-        with open(obstacles_file, "r") as f:
-            data = yaml.safe_load(f) or {}
+        visible_count = 0
 
-        obstacles = data.get("obstacles", [])
-        for obs in obstacles:
-            if obs.get("type", "") != "rectangle":
+        for (gx, gy) in self.uwb_locations:
+            # convert anchor grid back to real to check distance
+            rx, ry = self.to_real(gx, gy)
+            dist = np.hypot(rx - ax, ry - ay)
+
+            if dist > perception_range:
                 continue
-            corners = obs.get("corners", [])
-            if len(corners) != 4:
-                continue
 
-            # convert corners to grid coordinates
-            grid_corners = [self.to_grid(c[0], c[1]) for c in corners]
-            self._fill_rectangle(grid_corners)
+            if self._has_los((agx, agy), (gx, gy)):
+                visible_count += 1
 
-    def _fill_rectangle(self, grid_corners):
+        return visible_count
+
+    def _has_los(self, start_grid, end_grid):
         """
-        Fill a rectangle in grid_map given 4 grid corners.
+        Check LOS between two grid points using Bresenham line traversal.
+        LOS is True if all traversed cells are free (grid_map == 0).
         """
-        xs = [c[0] for c in grid_corners]
-        ys = [c[1] for c in grid_corners]
+        x0, y0 = start_grid
+        x1, y1 = end_grid
 
-        min_x, max_x = min(xs), max(xs)
-        min_y, max_y = min(ys), max(ys)
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        sx = 1 if x0 < x1 else -1
+        sy = 1 if y0 < y1 else -1
+        err = dx - dy
 
-        for gx in range(min_x, max_x + 1):
-            for gy in range(min_y, max_y + 1):
-                if 0 <= gx < self.grid_size and 0 <= gy < self.grid_size:
-                    self.grid_map[gx, gy] = 1
-                    self.obstacles_grid.append((gx, gy))
+        x, y = x0, y0
+
+        while True:
+            if not (0 <= x < self.grid_size and 0 <= y < self.grid_size):
+                return False
+            if self.grid_map[x, y] == 1:
+                return False
+            if x == x1 and y == y1:
+                break
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                x += sx
+            if e2 < dx:
+                err += dx
+                y += sy
+
+        return True

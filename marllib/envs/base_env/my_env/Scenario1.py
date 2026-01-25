@@ -1,14 +1,12 @@
 import numpy as np
-from utils import BaseScenario, Agent, Landmark, World
+from utils import BaseScenario, Agent, UWBPlanningWorld
 
 
 class Scenario(BaseScenario):
-    def make_world(self, N=3):
-        world = World()
+    def make_world(self, agent_num=3):
+        world = UWBPlanningWorld(map_size_m=50.0, map_resolution_m=0.5)
         # set any world properties first
-        world.dim_c = 2
-        num_agents = N
-        num_landmarks = N
+        num_agents = agent_num
         world.collaborative = True
         # add agents
         world.agents = [Agent() for i in range(num_agents)]
@@ -16,30 +14,20 @@ class Scenario(BaseScenario):
             agent.name = f'agent_{i}'
             agent.collide = True
             agent.silent = True
-            agent.size = 0.15
-        # add landmarks
-        world.landmarks = [Landmark() for i in range(num_landmarks)]
-        for i, landmark in enumerate(world.landmarks):
-            landmark.name = 'landmark %d' % i
-            landmark.collide = False
-            landmark.movable = False
+            agent.size = 0.2
         return world
 
     def reset_world(self, world, np_random):
+        half = world.map_size_m / 2.0
+        margin = 1.0  # 1m 边界缓冲
         # random properties for agents
         for i, agent in enumerate(world.agents):
             agent.color = np.array([0.35, 0.35, 0.85])
-        # random properties for landmarks
-        for i, landmark in enumerate(world.landmarks):
-            landmark.color = np.array([0.25, 0.25, 0.25])
         # set random initial states
         for agent in world.agents:
-            agent.state.p_pos = np_random.uniform(-1, +1, world.dim_p)
+            agent.state.p_pos = np_random.uniform(-half + margin, +half - margin, world.dim_p)
             agent.state.p_vel = np.zeros(world.dim_p)
             agent.state.c = np.zeros(world.dim_c)
-        for i, landmark in enumerate(world.landmarks):
-            landmark.state.p_pos = np_random.uniform(-1, +1, world.dim_p)
-            landmark.state.p_vel = np.zeros(world.dim_p)
 
     def benchmark_data(self, agent, world):
         rew = 0
