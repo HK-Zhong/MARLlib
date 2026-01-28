@@ -4,7 +4,7 @@ from utils import BaseScenario, Agent, UWBPlanningWorld
 
 class Scenario(BaseScenario):
     def make_world(self, agent_num=3):
-        world = UWBPlanningWorld(map_size_m=50.0, map_resolution_m=0.5)
+        world = UWBPlanningWorld(map_size=50.0, map_resolution=0.5)
         # set any world properties first
         num_agents = agent_num
         world.collaborative = True
@@ -15,19 +15,31 @@ class Scenario(BaseScenario):
             agent.collide = True
             agent.silent = True
             agent.size = 0.2
+            agent.perceived_grid_map = np.ones_like(world.grid_map, dtype=np.int8)
         return world
 
     def reset_world(self, world, np_random):
-        half = world.map_size_m / 2.0
-        margin = 1.0  # 1m 边界缓冲
-        # random properties for agents
-        for i, agent in enumerate(world.agents):
-            agent.color = np.array([0.35, 0.35, 0.85])
-        # set random initial states
+        # 1) reset each agent's perceived map (belief) to unknown
         for agent in world.agents:
-            agent.state.p_pos = np_random.uniform(-half + margin, +half - margin, world.dim_p)
-            agent.state.p_vel = np.zeros(world.dim_p)
-            agent.state.c = np.zeros(world.dim_c)
+            agent.perceived_grid_map = np.ones_like(world.grid_map, dtype=np.int8)
+
+        # 2) reset agent positions within half map size (map_size_m is full length)
+        half = int(world.map_size_m / 2.0)
+
+        for agent in world.agents:
+
+            while True:
+                agent_rx = np_random.randint(-half, half + 1)
+                agent_ry = np_random.randint(-half, half + 1)
+
+                agent_gx, agent_gy = world.to_grid(agent_rx, agent_ry)
+
+                # ensure inside map bounds and not inside obstacles
+                if (0 <= agent_gx < world.grid_map.shape[0] and 0 <= agent_gy < world.grid_map.shape[1]
+                        and world.grid_map[agent_gx, agent_gy] == 0):
+                    agent.state.p_pos = np.array([agent_rx, agent_ry], dtype=np.float32)
+                    agent.state.p_vel = np.zeros(world.dim_p)
+                    break
 
     def benchmark_data(self, agent, world):
         rew = 0

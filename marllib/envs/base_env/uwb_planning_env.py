@@ -4,11 +4,12 @@ import supersuit as ss
 from ray.rllib.env import PettingZooEnv, ParallelPettingZooEnv
 from pettingzoo.mpe import simple_adversary_v2, simple_crypto_v2, simple_v2, simple_push_v2, simple_tag_v2, \
     simple_spread_v2, simple_reference_v2, simple_world_comm_v2, simple_speaker_listener_v3
+from my_env import MyEnvWrapper
 import time
 
 # pettingzoo 1.12.0
 REGISTRY = dict()
-REGISTRY["scenario1"] = simple_spread_v2.parallel_env
+REGISTRY["scenario1"] = MyEnvWrapper.parallel_env
 
 policy_mapping_dict = {
     "scenario1": {

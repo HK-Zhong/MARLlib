@@ -1,0 +1,7 @@
+nohup python src/test.py > nohup_results/run_$(date +"%Y%m%d_%H%M%S").log 2>&1 &
+tensorboard --logdir .
+
+mpe（我们的uwb_planning_env.py）
+调用simple_spread_v2（我们的MyEnvWrapper.py），
+调用scenario（我们的scenario1.py），
+调用World（我们的UWBPlanningWorld类，在utils.py中）

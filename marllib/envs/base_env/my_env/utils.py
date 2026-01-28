@@ -1,6 +1,7 @@
 import numpy as np
 import os
 import yaml
+from scipy.ndimage import distance_transform_edt
 
 
 class BaseScenario:  # defines scenario upon which the world is built
@@ -91,9 +92,12 @@ class Agent(Entity):  # properties of agent entities
         # agent perception range
         self.perception_range = 30
 
+        # agent-specific perceived occupancy grid (initialized in UWBPlanningWorld)
+        self.perceived_grid_map = None
+
 
 class UWBPlanningWorld:  # multi-agent world
-    def __init__(self, map_size_m=50.0, map_resolution_m=0.5):
+    def __init__(self, map_size=50.0, map_resolution=0.5):
         # -------------------------------
         # Original world attributes
         # -------------------------------
@@ -117,8 +121,8 @@ class UWBPlanningWorld:  # multi-agent world
         # -------------------------------
         # Grid map (square occupancy grid)
         # -------------------------------
-        self.map_size_m = float(map_size_m)  # map side length in meters
-        self.map_resolution_m = float(map_resolution_m)  # meters per grid cell
+        self.map_size_m = float(map_size)  # map side length in meters
+        self.map_resolution_m = float(map_resolution)  # meters per grid cell
 
         self.grid_size = int(self.map_size_m / self.map_resolution_m)
 
@@ -129,21 +133,20 @@ class UWBPlanningWorld:  # multi-agent world
         # Euclidean Distance Transform (meters), derived from grid_map
         self.edt_map = None
 
-        # UWB anchor grid locations (gx, gy) loaded from UWB_Anchors.yml
-        self.uwb_locations = []
-        # obstacle grid locations loaded from YAML
-        self.obstacles_grid = []
+        # UWB anchors: {anchor_id: (x, y)} in real-world coordinates
+        self.uwb_locations = self.uwb_anchors_init()
 
-        self.load_uwb_anchors()
-        self.load_obstacles("obstacles.yaml")
+        # obstacle grid locations loaded from YAML, update self.grid_map
+        obstacles_file = os.path.abspath(os.path.join(os.path.dirname(__file__), "obstacles.yaml"))
+        self.obstacles_init(obstacles_file)
 
         # 只需要初始化时更新一次即可，作为地图ground truth参与训练
-        self.update_edt()
+        self.edt_map_init()
 
     # =====================================================
     # EDT maintenance (derived from grid_map)
     # =====================================================
-    def update_edt(self):
+    def edt_map_init(self):
         """
         Compute EDT from grid_map.
         edt_map unit: meters
@@ -151,68 +154,56 @@ class UWBPlanningWorld:  # multi-agent world
           0 = free
           1 = occupied / unknown
         """
-        try:
-            from scipy.ndimage import distance_transform_edt
-        except Exception as e:
-            raise ImportError(
-                "scipy is required for EDT. Please install scipy (e.g., `pip install scipy`)."
-            ) from e
-
         obstacle_mask = (self.grid_map == 1)
         dist_cells = distance_transform_edt(~obstacle_mask)
         self.edt_map = dist_cells * self.map_resolution_m
 
-    def is_safe(self, gx, gy, safe_distance_m):
+    def is_safe(self, x_real, y_real, safe_distance_m):
         """
         Safety query using EDT.
         Returns True if the EDT distance at (gx, gy) >= safe_distance_m.
         """
         if self.edt_map is None:
             return False
+
+        gx, gy = self.to_grid(x_real, y_real)
+
         if not (0 <= gx < self.grid_size and 0 <= gy < self.grid_size):
             return False
+
         return self.edt_map[gx, gy] >= safe_distance_m
 
     # =====================================================
     # Coordinate transform (real <-> grid)
     # =====================================================
     def to_grid(self, x_real, y_real):
-        """
-        Convert real-world coordinates (meters) to grid indices (gx, gy).
-        Map is a square centered at (0,0) spanning [-map_size_m/2, +map_size_m/2].
-        """
-        gx = int((float(x_real) + self.map_size_m / 2.0) / self.map_resolution_m)
-        gy = int((float(y_real) + self.map_size_m / 2.0) / self.map_resolution_m)
+        gx = int((x_real + self.map_size_m / 2.0) / self.map_resolution_m)
+        gy = int((y_real + self.map_size_m / 2.0) / self.map_resolution_m)
         return gx, gy
 
     def to_real(self, gx, gy):
-        """
-        Convert grid indices (gx, gy) back to real-world coordinates (meters).
-        """
-        x = int(gx) * self.map_resolution_m - self.map_size_m / 2.0
-        y = int(gy) * self.map_resolution_m - self.map_size_m / 2.0
+        x = gx * self.map_resolution_m - self.map_size_m / 2.0
+        y = gy * self.map_resolution_m - self.map_size_m / 2.0
         return round(x, 2), round(y, 2)
 
     # =====================================================
-    # UWB anchors loading (real -> grid locations)
+    # UWB anchors loading (ground-truth, real coordinates)
     # =====================================================
-    def load_uwb_anchors(self, anchors_file=None):
+    def uwb_anchors_init(self, anchors_file=None):
         """
-        Load UWB anchors from YAML config and populate `self.uwb_locations` with
-        each anchor's grid coordinate (gx, gy), computed from anchor (x, y).
-        YAML format:
-          UWB_Anchors:
-            - {id: 0, x: ..., y: ..., z: ...}
-            - ...
+        Load UWB anchors from YAML and return a dictionary:
+            {anchor_id: (x, y)}
+        Coordinates are REAL-WORLD (meters).
         """
-        # Default path: same folder as this utils.py file, named 'UWB_Anchors.yml'
         if anchors_file is None:
-            anchors_file = os.path.join(os.path.dirname(__file__), "UWB_Anchors.yml")
+            anchors_file = os.path.join(
+                os.path.dirname(__file__), "UWB_Anchors.yml"
+            )
 
-        self.uwb_locations = []
+        uwb_dict = {}
 
         if not os.path.exists(anchors_file):
-            return self.uwb_locations
+            return uwb_dict
 
         with open(anchors_file, "r") as f:
             data = yaml.safe_load(f) or {}
@@ -220,20 +211,21 @@ class UWBPlanningWorld:  # multi-agent world
         anchors = data.get("UWB_Anchors", [])
         for a in anchors:
             try:
+                aid = int(a["id"])
                 x = float(a["x"])
                 y = float(a["y"])
             except Exception:
                 continue
-            gx, gy = self.to_grid(x, y)
-            self.uwb_locations.append((gx, gy))
 
-        return self.uwb_locations
+            uwb_dict[aid] = (x, y)
 
-        # =====================================================
-        # Obstacle loading (rectangle obstacles)
-        # =====================================================
+        return uwb_dict
 
-    def load_obstacles(self, obstacles_file):
+    # =====================================================
+    # Obstacle loading (rectangle obstacles)
+    # =====================================================
+
+    def obstacles_init(self, obstacles_file):
         """
         Load rectangular obstacles from YAML and mark them in grid_map.
 
@@ -276,7 +268,6 @@ class UWBPlanningWorld:  # multi-agent world
             for gy in range(min_y, max_y + 1):
                 if 0 <= gx < self.grid_size and 0 <= gy < self.grid_size:
                     self.grid_map[gx, gy] = 1
-                    self.obstacles_grid.append((gx, gy))
 
     # return all entities in the world
     @property
@@ -382,35 +373,79 @@ class UWBPlanningWorld:  # multi-agent world
     # =====================================================
     # UWB LOS query within agent perception range
     # =====================================================
-    def count_visible_uwb_anchors(self, agent_pos_real, perception_range):
+    def los_based_map_update(self, agent, update_map=False, free_expand=1):
         """
-        Count how many UWB anchors are within the agent's perception range
+        Return IDs of UWB anchors that are within the agent's perception range
         AND have line-of-sight (LOS) to the agent.
 
+        Inputs are taken directly from the agent:
+          - agent.state.p_pos -> (agent_rx, agent_ry)
+          - agent.perception_range -> perception_range
+
         Args:
-            agent_pos_real: (x, y) real-world position of the agent (meters)
-            perception_range: sensing radius (meters)
+            agent: agent object with `state.p_pos`, `perception_range`, and optionally `perceived_grid_map`.
+            update_map (bool): if True, carve free cells (set to 0) along LOS rays into `agent.perceived_grid_map`.
+            free_expand (int): when update_map is True, expand each carved cell to a
+                (2*free_expand+1)x(2*free_expand+1) neighborhood.
 
         Returns:
-            int: number of anchors with LOS within perception range
+            list[int]: IDs of anchors with LOS within perception range
         """
-        ax, ay = agent_pos_real
-        agx, agy = self.to_grid(ax, ay)
+        agent_rx, agent_ry = agent.state.p_pos
+        perception_range = getattr(agent, "perception_range", 0.0)
 
-        visible_count = 0
+        agent_gx, agent_gy = self.to_grid(agent_rx, agent_ry)
 
-        for (gx, gy) in self.uwb_locations:
-            # convert anchor grid back to real to check distance
-            rx, ry = self.to_real(gx, gy)
-            dist = np.hypot(rx - ax, ry - ay)
+        # --- if we need to update perceived map, ensure it exists ---
+        if update_map:
+            if getattr(agent, "perceived_grid_map", None) is None:
+                agent.perceived_grid_map = np.ones_like(self.grid_map, dtype=np.int8)
 
+        visible_ids = []
+
+        for anchor_id, (anchor_rx, anchor_ry) in self.uwb_locations.items():
+            # distance check in real-world coordinates
+            dist = np.hypot(anchor_rx - agent_rx, anchor_ry - agent_ry)
             if dist > perception_range:
                 continue
 
-            if self._has_los((agx, agy), (gx, gy)):
-                visible_count += 1
+            # LOS check in grid space (ground truth)
+            anchor_gx, anchor_gy = self.to_grid(anchor_rx, anchor_ry)
+            if not self._has_los((agent_gx, agent_gy), (anchor_gx, anchor_gy)):
+                continue
 
-        return visible_count
+            visible_ids.append(anchor_id)
+
+            # optional: update agent perceived map along LOS ray
+            if update_map:
+                x0, y0 = agent_gx, agent_gy
+                x1, y1 = anchor_gx, anchor_gy
+
+                dx = abs(x1 - x0)
+                dy = abs(y1 - y0)
+                sx = 1 if x0 < x1 else -1
+                sy = 1 if y0 < y1 else -1
+                err = dx - dy
+
+                x, y = x0, y0
+                while True:
+                    for dx2 in range(-free_expand, free_expand + 1):
+                        for dy2 in range(-free_expand, free_expand + 1):
+                            nx, ny = x + dx2, y + dy2
+                            if 0 <= nx < self.grid_size and 0 <= ny < self.grid_size:
+                                agent.perceived_grid_map[nx, ny] = 0
+
+                    if x == x1 and y == y1:
+                        break
+                    e2 = 2 * err
+                    if e2 > -dy:
+                        err -= dy
+                        x += sx
+                    if e2 < dx:
+                        err += dx
+                        y += sy
+
+        return visible_ids
 
     def _has_los(self, start_grid, end_grid):
         """
