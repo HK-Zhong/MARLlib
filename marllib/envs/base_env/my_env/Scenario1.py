@@ -19,27 +19,7 @@ class Scenario(BaseScenario):
         return world
 
     def reset_world(self, world, np_random):
-        # 1) reset each agent's perceived map (belief) to unknown
-        for agent in world.agents:
-            agent.perceived_grid_map = np.ones_like(world.grid_map, dtype=np.int8)
-
-        # 2) reset agent positions within half map size (map_size_m is full length)
-        half = int(world.map_size_m / 2.0)
-
-        for agent in world.agents:
-
-            while True:
-                agent_rx = np_random.randint(-half, half + 1)
-                agent_ry = np_random.randint(-half, half + 1)
-
-                agent_gx, agent_gy = world.to_grid(agent_rx, agent_ry)
-
-                # ensure inside map bounds and not inside obstacles
-                if (0 <= agent_gx < world.grid_map.shape[0] and 0 <= agent_gy < world.grid_map.shape[1]
-                        and world.grid_map[agent_gx, agent_gy] == 0):
-                    agent.state.p_pos = np.array([agent_rx, agent_ry], dtype=np.float32)
-                    agent.state.p_vel = np.zeros(world.dim_p)
-                    break
+        world.reset(np_random)
 
     def benchmark_data(self, agent, world):
         rew = 0
@@ -66,36 +46,202 @@ class Scenario(BaseScenario):
         return True if dist < dist_min else False
 
     def reward(self, agent, world):
-        # Agents are rewarded based on minimum agent distance to each landmark, penalized for collisions
-        rew = 0
+        """
+        Sample reward (minimal, intended to be easy to iterate on):
+
+        + information gain: newly discovered free cells in agent.perceived_grid_map
+        + small shaping: more visible UWB anchors is slightly better
+        - collisions
+        - optional safety penalty (via world.is_safe)
+        - small step penalty (encourage efficiency)
+        """
+        # -------------------------
+        # number of visible anchors
+        # -------------------------
+        visible_ids = agent.last_visible_uwb_ids
+        num_visible = len(visible_ids)
+        total_anchors = max(len(getattr(world, "uwb_locations", {})), 1)
+
+        # information gain: cells that changed from unknown(1) -> free(0)
+        prev_map = getattr(agent, "prev_perceived_grid_map", None)
+        curr_map = getattr(agent, "perceived_grid_map", None)
+
+        if prev_map is None or curr_map is None:
+            new_free = 0
+        else:
+            new_free = int(np.sum((prev_map == 1) & (curr_map == 0)))
+
+        denom = float(max(world.grid_size * world.grid_size, 1))
+        info_gain = (new_free / denom) if denom > 0 else 0.0
+
+        # -------------------------
+        # Collision penalty
+        # -------------------------
+        collisions = 0
         if agent.collide:
-            for a in world.agents:
-                if self.is_collision(a, agent):
-                    rew -= 1
-        return rew
+            for other_agent in world.agents:
+                if other_agent is agent:
+                    continue
+                if self.is_collision(other_agent, agent):
+                    collisions += 1
+
+        # -------------------------
+        # Optional safety penalty (EDT-based)
+        # -------------------------
+        unsafe = 0
+        if hasattr(world, "is_safe"):
+            x_real, y_real = agent.state.p_pos
+            if not world.is_safe(float(x_real), float(y_real), world.safe_distance_m):
+                unsafe = 1
+
+        # -------------------------
+        # Combine terms
+        # -------------------------
+        W_INFO = 5.0
+        W_VISIBLE = 0.1
+        W_COLLIDE = 1.0
+        W_UNSAFE = 0.5
+        W_STEP = 0.01
+
+        rew = 0.0
+        rew += W_INFO * info_gain
+        rew += W_VISIBLE * (num_visible / float(total_anchors))
+        rew -= W_COLLIDE * float(collisions)
+        rew -= W_UNSAFE * float(unsafe)
+        rew -= W_STEP
+
+        return float(rew)
 
     def global_reward(self, world):
-        rew = 0
-        for l in world.landmarks:
-            dists = [np.sqrt(np.sum(np.square(a.state.p_pos - l.state.p_pos))) for a in world.agents]
-            rew -= min(dists)
-        return rew
+        """
+        Cooperative exploration global reward (team-level):
+
+        + TEAM information gain: union of newly discovered free cells across agents
+        + small shaping: average number of visible UWB anchors
+        - inter-agent collisions (pairwise)
+        - optional safety penalty (count unsafe agents)
+        - small step penalty
+        """
+        # -------------------------
+        # TEAM information gain (union over agents)
+        # -------------------------
+        team_delta = np.zeros_like(world.grid_map, dtype=bool)
+
+        for agent in world.agents:
+            prev_map = getattr(agent, "prev_perceived_grid_map", None)
+            curr_map = getattr(agent, "perceived_grid_map", None)
+            if prev_map is None or curr_map is None:
+                continue
+            team_delta |= ((prev_map == 1) & (curr_map == 0))
+
+        denom = float(max(world.grid_size * world.grid_size, 1))
+        info_gain_team = float(np.sum(team_delta)) / denom
+
+        # -------------------------
+        # Visible anchors shaping (average, query only)
+        # -------------------------
+        total_anchors = max(len(getattr(world, "uwb_locations", {})), 1)
+        visible_sum = 0.0
+        for agent in world.agents:
+            visible_ids = agent.last_visible_uwb_ids
+            visible_sum += float(len(visible_ids)) / float(total_anchors)
+        visible_avg = visible_sum / float(max(len(world.agents), 1))
+
+        # -------------------------
+        # Global collision penalty (pairwise)
+        # -------------------------
+        collisions = 0
+        n = len(world.agents)
+        for i in range(n):
+            for j in range(i + 1, n):
+                if self.is_collision(world.agents[i], world.agents[j]):
+                    collisions += 1
+
+        # -------------------------
+        # Optional global safety penalty (count unsafe agents)
+        # -------------------------
+        unsafe_count = 0
+        if hasattr(world, "is_safe"):
+            safe_distance = getattr(world, "safe_distance_m", 1.0)
+            for agent in world.agents:
+                x_real, y_real = agent.state.p_pos
+                if not world.is_safe(float(x_real), float(y_real), safe_distance):
+                    unsafe_count += 1
+
+        # -------------------------
+        # Combine terms
+        # -------------------------
+        W_TEAM_INFO = 8.0
+        W_VISIBLE = 0.2
+        W_COLLIDE = 1.0
+        W_UNSAFE = 0.2
+        W_STEP = 0.01
+
+        rew = 0.0
+        rew += W_TEAM_INFO * info_gain_team
+        rew += W_VISIBLE * visible_avg
+        rew -= W_COLLIDE * float(collisions)
+        rew -= W_UNSAFE * float(unsafe_count)
+        rew -= W_STEP
+
+        return float(rew)
 
     def observation(self, agent, world):
-        # get positions of all entities in this agent's reference frame
-        entity_pos = []
-        for entity in world.landmarks:  # world.entities:
-            entity_pos.append(entity.state.p_pos - agent.state.p_pos)
-        # entity colors
-        entity_color = []
-        for entity in world.landmarks:  # world.entities:
-            entity_color.append(entity.color)
-        # communication of all other agents
-        comm = []
-        other_pos = []
-        for other in world.agents:
-            if other is agent:
-                continue
-            comm.append(other.state.c)
-            other_pos.append(other.state.p_pos - agent.state.p_pos)
-        return np.concatenate([agent.state.p_vel] + [agent.state.p_pos] + entity_pos + other_pos + comm)
+        """
+        Sample observation design (normalized + fixed patch).
+
+        Observation = [
+            normalized agent position (2),          in [-1, 1] roughly
+            normalized agent velocity (2),          scaled by a constant(max velocity)
+            normalized number of visible anchors (1),
+            flattened local perceived grid map patch ( (2R+1) x (2R+1) )
+        ]
+        """
+
+        # -------------------------------------------------
+        # 1) Update perceived map using UWB LOS (belief update)
+        # -------------------------------------------------
+        visible_ids = agent.last_visible_uwb_ids
+        num_visible = len(visible_ids)
+
+        # -------------------------------------------------
+        # 2) Normalize agent kinematics (real-world coordinates)
+        # -------------------------------------------------
+        # position normalization: map is centered at (0,0) with side length map_size_m
+        half_map = float(world.map_size_m) / 2.0
+        pos = agent.state.p_pos.astype(np.float32)
+        pos_norm = pos / max(half_map, 1e-6)
+
+        # velocity normalization: use a conservative constant scale (m/s)
+        vel = agent.state.p_vel.astype(np.float32)
+        vel_norm = vel / agent.max_speed
+
+        # visible anchors normalization: scale by total anchors (avoid magnitude mismatch)
+        total_anchors = max(len(getattr(world, "uwb_locations", {})), 1)
+        num_visible_norm = np.array([num_visible / float(total_anchors)], dtype=np.float32)
+
+        obs_parts = [pos_norm, vel_norm, num_visible_norm]
+
+        # -------------------------------------------------
+        # 3) Fixed-size local perceived grid map patch
+        # -------------------------------------------------
+        PATCH_RADIUS = 7  # grid cells -> (2*7+1)=15, patch dim=225 (reasonable for MLP)
+        gx, gy = world.to_grid(pos[0], pos[1])
+
+        patch = []
+        for dx in range(-PATCH_RADIUS, PATCH_RADIUS + 1):
+            for dy in range(-PATCH_RADIUS, PATCH_RADIUS + 1):
+                nx, ny = gx + dx, gy + dy
+                if 0 <= nx < world.grid_map.shape[0] and 0 <= ny < world.grid_map.shape[1]:
+                    patch.append(agent.perceived_grid_map[nx, ny])
+                else:
+                    # outside map treated as unknown
+                    patch.append(1)
+
+        patch = np.array(patch, dtype=np.float32)
+        obs_parts.append(patch)
+
+        # -------------------------------------------------
+        # 4) Concatenate into 1D observation
+        # -------------------------------------------------
+        return np.concatenate(obs_parts, axis=0)

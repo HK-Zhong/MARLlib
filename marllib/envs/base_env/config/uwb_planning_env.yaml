@@ -1,7 +1,7 @@
 env: uwb_planning_env
 
 env_args:
-  map_name: "scenario1" # others can be found in mpe.py
+  map_name: "Scenario1" # others can be found in mpe.py
   continuous_actions: False
   max_cycles: 25
 

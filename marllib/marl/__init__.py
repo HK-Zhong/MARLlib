@@ -148,6 +148,7 @@ def make_env(
         env = COOP_ENV_REGISTRY[env_config["env"]](env_config["env_args"])
     else:
         register_env(env_reg_name, lambda _: ENV_REGISTRY[env_config["env"]](env_config["env_args"]))
+        # ENV_REGISTRY["uwb_planning_env"]["Scenario1"]
         env = ENV_REGISTRY[env_config["env"]](env_config["env_args"])
 
     return env, env_config

@@ -2,17 +2,15 @@ from ray.rllib.env.multi_agent_env import MultiAgentEnv
 from gym.spaces import Dict as GymDict, Discrete, Box
 import supersuit as ss
 from ray.rllib.env import PettingZooEnv, ParallelPettingZooEnv
-from pettingzoo.mpe import simple_adversary_v2, simple_crypto_v2, simple_v2, simple_push_v2, simple_tag_v2, \
-    simple_spread_v2, simple_reference_v2, simple_world_comm_v2, simple_speaker_listener_v3
 from my_env import MyEnvWrapper
 import time
 
 # pettingzoo 1.12.0
 REGISTRY = dict()
-REGISTRY["scenario1"] = MyEnvWrapper.parallel_env
+REGISTRY["Scenario1"] = MyEnvWrapper.parallel_env
 
 policy_mapping_dict = {
-    "scenario1": {
+    "Scenario1": {
         "description": "UAV UWB-based LOS-aware planning scenario",
         "team_prefix": ("agent_",),
         "all_agents_one_policy": True,
