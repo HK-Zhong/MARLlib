@@ -2,7 +2,7 @@ from pettingzoo.utils.conversions import parallel_wrapper_fn
 
 # from pettingzoo.mpe._mpe_utils.simple_env import SimpleEnv, make_env
 from marllib.patch.rllib.utils.simple_env import SimpleEnv, make_env
-from Scenario1 import Scenario
+from marllib.envs.base_env.my_env.Scenario1 import Scenario
 
 
 class raw_env(SimpleEnv):

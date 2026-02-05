@@ -1,5 +1,5 @@
 import numpy as np
-from utils import BaseScenario, Agent, UWBPlanningWorld
+from marllib.envs.base_env.my_env.utils import BaseScenario, Agent, UWBPlanningWorld
 
 
 class Scenario(BaseScenario):
@@ -91,7 +91,7 @@ class Scenario(BaseScenario):
         unsafe = 0
         if hasattr(world, "is_safe"):
             x_real, y_real = agent.state.p_pos
-            if not world.is_safe(float(x_real), float(y_real), world.safe_distance_m):
+            if not world.is_safe(float(x_real), float(y_real)):
                 unsafe = 1
 
         # -------------------------
@@ -162,10 +162,9 @@ class Scenario(BaseScenario):
         # -------------------------
         unsafe_count = 0
         if hasattr(world, "is_safe"):
-            safe_distance = getattr(world, "safe_distance_m", 1.0)
             for agent in world.agents:
                 x_real, y_real = agent.state.p_pos
-                if not world.is_safe(float(x_real), float(y_real), safe_distance):
+                if not world.is_safe(float(x_real), float(y_real)):
                     unsafe_count += 1
 
         # -------------------------

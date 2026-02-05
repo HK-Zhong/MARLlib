@@ -2,7 +2,7 @@ from ray.rllib.env.multi_agent_env import MultiAgentEnv
 from gym.spaces import Dict as GymDict, Discrete, Box
 import supersuit as ss
 from ray.rllib.env import PettingZooEnv, ParallelPettingZooEnv
-from my_env import MyEnvWrapper
+from marllib.envs.base_env.my_env import MyEnvWrapper
 import time
 
 # pettingzoo 1.12.0
