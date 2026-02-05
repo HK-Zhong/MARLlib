@@ -135,6 +135,14 @@ class UWBPlanningWorld:  # multi-agent world
         self.edt_map = None
 
         self.uwb_locations = dict()
+        # Precomputed anchor grid coordinates: {anchor_id: (gx, gy)}
+        self.uwb_grid_locations = dict()
+        # Vectorized anchor storage (aligned arrays)
+        self.uwb_anchor_ids = np.array([], dtype=np.int32)
+        self.uwb_anchor_xs = np.array([], dtype=np.float32)
+        self.uwb_anchor_ys = np.array([], dtype=np.float32)
+        self.uwb_anchor_gxs = np.array([], dtype=np.int32)
+        self.uwb_anchor_gys = np.array([], dtype=np.int32)
 
         # Anchor LOS connectivity prior
         self.uwb_los_lines = [
@@ -144,7 +152,14 @@ class UWBPlanningWorld:  # multi-agent world
             (12, 13), (11, 13), (8, 13),
             (4, 5), (5, 6)
         ]
+        # Cache for LOS checks: ((gx1,gy1),(gx2,gy2)) -> bool
+        # Assumes self.grid_map (obstacles) is static within an episode.
+        self._los_cache = {}
 
+        # Precomputed anchor-to-anchor LOS prior grid (shared by all agents)
+        self._uwb_los_prior_grid = None
+        # Cache for free_expand neighborhood offsets (free_expand -> (dxs, dys))
+        self._expand_offsets_cache = {}
         # unified map initialization
         self.map_init()
 
@@ -165,6 +180,31 @@ class UWBPlanningWorld:  # multi-agent world
         # 2) load UWB anchor locations (ground truth, real coords)
         # UWB anchors: {anchor_id: (x, y)} in real-world coordinates
         self.uwb_locations = self.uwb_anchors_init()
+
+        # Precompute anchor grid coordinates once (for faster per-step queries)
+        self.uwb_grid_locations = {
+            aid: self.to_grid(xy[0], xy[1]) for aid, xy in self.uwb_locations.items()
+        }
+        # Build aligned numpy arrays for fast distance filtering
+        if self.uwb_locations:
+            _ids = np.array(sorted(self.uwb_locations.keys()), dtype=np.int32)
+            _xs = np.array([self.uwb_locations[i][0] for i in _ids], dtype=np.float32)
+            _ys = np.array([self.uwb_locations[i][1] for i in _ids], dtype=np.float32)
+            _gxy = np.array([self.uwb_grid_locations[i] for i in _ids], dtype=np.int32)
+            self.uwb_anchor_ids = _ids
+            self.uwb_anchor_xs = _xs
+            self.uwb_anchor_ys = _ys
+            self.uwb_anchor_gxs = _gxy[:, 0]
+            self.uwb_anchor_gys = _gxy[:, 1]
+        else:
+            self.uwb_anchor_ids = np.array([], dtype=np.int32)
+            self.uwb_anchor_xs = np.array([], dtype=np.float32)
+            self.uwb_anchor_ys = np.array([], dtype=np.float32)
+            self.uwb_anchor_gxs = np.array([], dtype=np.int32)
+            self.uwb_anchor_gys = np.array([], dtype=np.int32)
+
+        # Precompute anchor-anchor LOS prior grid once
+        self._uwb_los_prior_grid = self._build_uwb_los_prior_grid(free_expand=1)
 
         # 3) compute EDT from updated grid_map
         self.edt_map_init()
@@ -274,21 +314,36 @@ class UWBPlanningWorld:  # multi-agent world
         if not self.uwb_locations:
             return
 
-        for a_id, b_id in getattr(self, "uwb_los_lines", []):
+        if self._uwb_los_prior_grid is None:
+            return
+
+        # Merge shared prior grid into agent's perceived map (free = 0)
+        target_grid_map[self._uwb_los_prior_grid == 0] = 0
+
+    def _build_uwb_los_prior_grid(self, free_expand=1):
+        """
+        Precompute a grid map encoding anchor-to-anchor LOS corridors.
+        This grid is shared across all agents and should be computed ONCE.
+        """
+        prior_grid = np.ones_like(self.grid_map, dtype=np.int8)
+
+        if not self.uwb_locations:
+            return prior_grid
+
+        for a_id, b_id in self.uwb_los_lines:
             if a_id not in self.uwb_locations or b_id not in self.uwb_locations:
                 continue
 
-            a_rx, a_ry = self.uwb_locations[a_id]
-            b_rx, b_ry = self.uwb_locations[b_id]
-
-            a_gx, a_gy = self.to_grid(a_rx, a_ry)
-            b_gx, b_gy = self.to_grid(b_rx, b_ry)
-
-            # Only carve if LOS is not blocked by obstacles in current ground-truth map
-            if not self._has_los((a_gx, a_gy), (b_gx, b_gy)):
+            a_gx, a_gy = self.uwb_grid_locations.get(a_id, (None, None))
+            b_gx, b_gy = self.uwb_grid_locations.get(b_id, (None, None))
+            if a_gx is None or b_gx is None:
                 continue
 
-            # Bresenham line traversal from (a_gx,a_gy) to (b_gx,b_gy)
+            # Only carve if LOS is not blocked in ground-truth map
+            if not self._has_los_cached((a_gx, a_gy), (b_gx, b_gy)):
+                continue
+
+            # Bresenham line traversal
             x0, y0 = a_gx, a_gy
             x1, y1 = b_gx, b_gy
             dx = abs(x1 - x0)
@@ -303,7 +358,7 @@ class UWBPlanningWorld:  # multi-agent world
                     for ey in range(-free_expand, free_expand + 1):
                         nx, ny = x + ex, y + ey
                         if 0 <= nx < self.grid_size and 0 <= ny < self.grid_size:
-                            target_grid_map[nx, ny] = 0
+                            prior_grid[nx, ny] = 0
 
                 if x == x1 and y == y1:
                     break
@@ -314,6 +369,8 @@ class UWBPlanningWorld:  # multi-agent world
                 if e2 < dx:
                     err += dx
                     y += sy
+
+        return prior_grid
 
     # =====================================================
     # Obstacle loading (rectangle obstacles)
@@ -449,7 +506,9 @@ class UWBPlanningWorld:  # multi-agent world
             agent.perceived_grid_map = np.ones_like(self.grid_map, dtype=np.int8)
             agent.prev_perceived_grid_map = None
             self.uwb_los_prior_to_map(agent, free_expand=1)
-            agent.last_visible_uwb_ids = self.los_based_map_update(agent, update_map=True, free_expand=0)
+            agent.last_visible_uwb_ids, agent.last_new_free_count = self.los_based_map_update(
+                agent, update_map=True, free_expand=0
+            )
 
     # update state of the world
     def step(self):
@@ -530,9 +589,10 @@ class UWBPlanningWorld:  # multi-agent world
             if getattr(agent, "perceived_grid_map", None) is None:
                 agent.perceived_grid_map = np.ones_like(self.grid_map, dtype=np.int8)
 
-            agent.prev_perceived_grid_map = agent.perceived_grid_map.copy()
-
-            agent.last_visible_uwb_ids = self.los_based_map_update(agent, update_map=True, free_expand=0)
+            # No longer copy the full perceived map each step
+            agent.last_visible_uwb_ids, agent.last_new_free_count = self.los_based_map_update(
+                agent, update_map=True, free_expand=0
+            )
 
         # -------------------------------------------------
         # 6. Update agent communication state
@@ -619,6 +679,27 @@ class UWBPlanningWorld:  # multi-agent world
     # =====================================================
     # UWB LOS query within agent perception range
     # =====================================================
+    def _has_los_cached(self, start_grid, end_grid):
+        """
+        Cached LOS check between two grid points.
+        Order-invariant: (a,b) == (b,a).
+        """
+        key = (start_grid, end_grid)
+        key_rev = (end_grid, start_grid)
+
+        # Ensure cache exists (should already be created in __init__).
+        if not hasattr(self, "_los_cache") or self._los_cache is None:
+            self._los_cache = {}
+
+        if key in self._los_cache:
+            return self._los_cache[key]
+        if key_rev in self._los_cache:
+            return self._los_cache[key_rev]
+
+        los = self._has_los(start_grid, end_grid)
+        self._los_cache[key] = los
+        return los
+
     def los_based_map_update(self, agent, update_map=False, free_expand=1):
         """
         Return IDs of UWB anchors that are within the agent's perception range
@@ -638,60 +719,47 @@ class UWBPlanningWorld:  # multi-agent world
             list[int]: IDs of anchors with LOS within perception range
         """
         agent_rx, agent_ry = agent.state.p_pos
-        perception_range = getattr(agent, "perception_range", 0.0)
-
+        perception_range = float(getattr(agent, "perception_range", 0.0))
         agent_gx, agent_gy = self.to_grid(agent_rx, agent_ry)
 
-        # --- if we need to update perceived map, ensure it exists ---
-        if update_map:
-            if getattr(agent, "perceived_grid_map", None) is None:
-                agent.perceived_grid_map = np.ones_like(self.grid_map, dtype=np.int8)
+        # Ensure perceived map exists if we will update it
+        if update_map and getattr(agent, "perceived_grid_map", None) is None:
+            agent.perceived_grid_map = np.ones_like(self.grid_map, dtype=np.int8)
 
         visible_ids = []
+        new_free_count = 0
 
-        for anchor_id, (anchor_rx, anchor_ry) in self.uwb_locations.items():
-            # distance check in real-world coordinates
-            dist = np.hypot(anchor_rx - agent_rx, anchor_ry - agent_ry)
-            if dist > perception_range:
+        in_range_idx = self._anchors_in_range_indices(agent_rx, agent_ry, perception_range)
+        if in_range_idx.size == 0:
+            return (visible_ids, new_free_count) if update_map else visible_ids
+
+        for idx in in_range_idx:
+            anchor_id = int(self.uwb_anchor_ids[idx])
+            anchor_gx = int(self.uwb_anchor_gxs[idx])
+            anchor_gy = int(self.uwb_anchor_gys[idx])
+
+            # Fast path: LOS query only
+            if not update_map:
+                if self._has_los_cached((agent_gx, agent_gy), (anchor_gx, anchor_gy)):
+                    visible_ids.append(anchor_id)
                 continue
 
-            # LOS check in grid space (ground truth)
-            anchor_gx, anchor_gy = self.to_grid(anchor_rx, anchor_ry)
-            if not self._has_los((agent_gx, agent_gy), (anchor_gx, anchor_gy)):
+            # update_map=True: do one traversal (LOS + cells)
+            los_ok, ray_cells = self._bresenham_ray_cells_and_los(agent_gx, agent_gy, anchor_gx, anchor_gy)
+
+            # Update LOS cache (both directions)
+            if not hasattr(self, "_los_cache") or self._los_cache is None:
+                self._los_cache = {}
+            self._los_cache[((agent_gx, agent_gy), (anchor_gx, anchor_gy))] = los_ok
+            self._los_cache[((anchor_gx, anchor_gy), (agent_gx, agent_gy))] = los_ok
+
+            if not los_ok:
                 continue
 
             visible_ids.append(anchor_id)
+            new_free_count += self._carve_cells_and_count_new(agent.perceived_grid_map, ray_cells, free_expand)
 
-            # optional: update agent perceived map along LOS ray
-            if update_map:
-                x0, y0 = agent_gx, agent_gy
-                x1, y1 = anchor_gx, anchor_gy
-
-                dx = abs(x1 - x0)
-                dy = abs(y1 - y0)
-                sx = 1 if x0 < x1 else -1
-                sy = 1 if y0 < y1 else -1
-                err = dx - dy
-
-                x, y = x0, y0
-                while True:
-                    for dx2 in range(-free_expand, free_expand + 1):
-                        for dy2 in range(-free_expand, free_expand + 1):
-                            nx, ny = x + dx2, y + dy2
-                            if 0 <= nx < self.grid_size and 0 <= ny < self.grid_size:
-                                agent.perceived_grid_map[nx, ny] = 0
-
-                    if x == x1 and y == y1:
-                        break
-                    e2 = 2 * err
-                    if e2 > -dy:
-                        err -= dy
-                        x += sx
-                    if e2 < dx:
-                        err += dx
-                        y += sy
-
-        return visible_ids
+        return (visible_ids, new_free_count) if update_map else visible_ids
 
     def _has_los(self, start_grid, end_grid):
         """
@@ -725,3 +793,98 @@ class UWBPlanningWorld:  # multi-agent world
                 y += sy
 
         return True
+
+    def _anchors_in_range_indices(self, agent_rx, agent_ry, perception_range):
+        """Return numpy indices of anchors within perception_range (real coords)."""
+        if self.uwb_anchor_ids.size == 0:
+            return np.array([], dtype=np.int64)
+        dists = np.hypot(self.uwb_anchor_xs - agent_rx, self.uwb_anchor_ys - agent_ry)
+        return np.nonzero(dists <= perception_range)[0]
+
+    def _bresenham_ray_cells_and_los(self, x0, y0, x1, y1):
+        """Single Bresenham traversal: returns (los_ok, ray_cells)."""
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        sx = 1 if x0 < x1 else -1
+        sy = 1 if y0 < y1 else -1
+        err = dx - dy
+
+        x, y = x0, y0
+        ray_cells = []
+
+        while True:
+            # bounds check
+            if not (0 <= x < self.grid_size and 0 <= y < self.grid_size):
+                return False, ray_cells
+            # obstacle check on ground-truth map
+            if self.grid_map[x, y] == 1:
+                return False, ray_cells
+
+            ray_cells.append((x, y))
+
+            if x == x1 and y == y1:
+                break
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                x += sx
+            if e2 < dx:
+                err += dx
+                y += sy
+
+        return True, ray_cells
+
+    def _carve_cells_and_count_new(self, grid_map, ray_cells, free_expand):
+        """Carve ray_cells into grid_map and return count of newly discovered cells (1->0)."""
+        if not ray_cells:
+            return 0
+
+        cells = np.asarray(ray_cells, dtype=np.int32)
+        dxs, dys = self._get_expand_offsets(free_expand)
+
+        nx = cells[:, 0:1] + dxs.reshape(1, -1)
+        ny = cells[:, 1:2] + dys.reshape(1, -1)
+
+        nx = nx.ravel()
+        ny = ny.ravel()
+
+        mask = (nx >= 0) & (nx < self.grid_size) & (ny >= 0) & (ny < self.grid_size)
+        if not np.any(mask):
+            return 0
+
+        nxm = nx[mask].astype(np.int32, copy=False)
+        nym = ny[mask].astype(np.int32, copy=False)
+
+        # De-duplicate cells to avoid over-counting due to overlaps
+        lin = nxm * self.grid_size + nym
+        lin_u = np.unique(lin)
+
+        flat = grid_map.ravel()
+        newly = int(np.sum(flat[lin_u] == 1))
+        flat[lin_u] = 0
+
+        return newly
+
+    def _get_expand_offsets(self, free_expand):
+        """Return cached neighborhood offsets for a given free_expand.
+
+        Offsets are 1D arrays dxs, dys of length (2k+1)^2.
+        """
+        k = int(max(0, free_expand))
+        if not hasattr(self, "_expand_offsets_cache") or self._expand_offsets_cache is None:
+            self._expand_offsets_cache = {}
+
+        if k in self._expand_offsets_cache:
+            return self._expand_offsets_cache[k]
+
+        if k == 0:
+            dxs = np.array([0], dtype=np.int32)
+            dys = np.array([0], dtype=np.int32)
+        else:
+            rng = np.arange(-k, k + 1, dtype=np.int32)
+            dx_grid, dy_grid = np.meshgrid(rng, rng, indexing="ij")
+            dxs = dx_grid.ravel()
+            dys = dy_grid.ravel()
+
+        self._expand_offsets_cache[k] = (dxs, dys)
+        return dxs, dys

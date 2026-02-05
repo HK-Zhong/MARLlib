@@ -15,7 +15,10 @@ class Scenario(BaseScenario):
             agent.collide = True
             agent.silent = True
             agent.size = 0.2
-            agent.perceived_grid_map = np.ones_like(world.grid_map, dtype=np.int8)
+            agent.max_speed = 3.0
+
+        world.reset()
+
         return world
 
     def reset_world(self, world, np_random):
@@ -50,6 +53,7 @@ class Scenario(BaseScenario):
         Sample reward (minimal, intended to be easy to iterate on):
 
         + information gain: newly discovered free cells in agent.perceived_grid_map
+          (incremental count from world.los_based_map_update)
         + small shaping: more visible UWB anchors is slightly better
         - collisions
         - optional safety penalty (via world.is_safe)
@@ -58,27 +62,22 @@ class Scenario(BaseScenario):
         # -------------------------
         # number of visible anchors
         # -------------------------
-        visible_ids = agent.last_visible_uwb_ids
+        visible_ids = getattr(agent, "last_visible_uwb_ids", [])
         num_visible = len(visible_ids)
         total_anchors = max(len(getattr(world, "uwb_locations", {})), 1)
 
-        # information gain: cells that changed from unknown(1) -> free(0)
-        prev_map = getattr(agent, "prev_perceived_grid_map", None)
-        curr_map = getattr(agent, "perceived_grid_map", None)
-
-        if prev_map is None or curr_map is None:
-            new_free = 0
-        else:
-            new_free = int(np.sum((prev_map == 1) & (curr_map == 0)))
-
+        # -------------------------
+        # information gain (incremental, no full-map copy)
+        # -------------------------
+        new_free = int(getattr(agent, "last_new_free_count", 0))
         denom = float(max(world.grid_size * world.grid_size, 1))
-        info_gain = (new_free / denom) if denom > 0 else 0.0
+        info_gain = (float(new_free) / denom) if denom > 0 else 0.0
 
         # -------------------------
         # Collision penalty
         # -------------------------
         collisions = 0
-        if agent.collide:
+        if getattr(agent, "collide", False):
             for other_agent in world.agents:
                 if other_agent is agent:
                     continue
@@ -123,19 +122,19 @@ class Scenario(BaseScenario):
         - small step penalty
         """
         # -------------------------
-        # TEAM information gain (union over agents)
+        # TEAM information gain (incremental, summed over agents)
+        # Note: This sums per-agent newly discovered cells and may over-count
+        # overlaps if multiple agents discover the same cell in the same step.
+        # It is fast and works well as a cooperative shaping signal.
         # -------------------------
-        team_delta = np.zeros_like(world.grid_map, dtype=bool)
-
-        for agent in world.agents:
-            prev_map = getattr(agent, "prev_perceived_grid_map", None)
-            curr_map = getattr(agent, "perceived_grid_map", None)
-            if prev_map is None or curr_map is None:
-                continue
-            team_delta |= ((prev_map == 1) & (curr_map == 0))
-
         denom = float(max(world.grid_size * world.grid_size, 1))
-        info_gain_team = float(np.sum(team_delta)) / denom
+        team_new_free = 0
+        for agent in world.agents:
+            team_new_free += int(getattr(agent, "last_new_free_count", 0))
+
+        # Prevent extreme spikes if overlaps occur
+        team_new_free = min(team_new_free, int(denom))
+        info_gain_team = (float(team_new_free) / denom) if denom > 0 else 0.0
 
         # -------------------------
         # Visible anchors shaping (average, query only)
@@ -227,17 +226,34 @@ class Scenario(BaseScenario):
         PATCH_RADIUS = 7  # grid cells -> (2*7+1)=15, patch dim=225 (reasonable for MLP)
         gx, gy = world.to_grid(pos[0], pos[1])
 
-        patch = []
-        for dx in range(-PATCH_RADIUS, PATCH_RADIUS + 1):
-            for dy in range(-PATCH_RADIUS, PATCH_RADIUS + 1):
-                nx, ny = gx + dx, gy + dy
-                if 0 <= nx < world.grid_map.shape[0] and 0 <= ny < world.grid_map.shape[1]:
-                    patch.append(agent.perceived_grid_map[nx, ny])
-                else:
-                    # outside map treated as unknown
-                    patch.append(1)
+        # Vectorized patch extraction with padding (outside map treated as unknown=1)
+        R = PATCH_RADIUS
+        H, W = agent.perceived_grid_map.shape
 
-        patch = np.array(patch, dtype=np.float32)
+        x0, x1 = gx - R, gx + R + 1
+        y0, y1 = gy - R, gy + R + 1
+
+        # Clip to valid range for slicing
+        sx0, sx1 = max(0, x0), min(H, x1)
+        sy0, sy1 = max(0, y0), min(W, y1)
+
+        patch_mat = agent.perceived_grid_map[sx0:sx1, sy0:sy1]
+
+        # Padding needed on each side to reach (2R+1, 2R+1)
+        pad_left = sx0 - x0
+        pad_right = x1 - sx1
+        pad_bottom = sy0 - y0
+        pad_top = y1 - sy1
+
+        if pad_left or pad_right or pad_bottom or pad_top:
+            patch_mat = np.pad(
+                patch_mat,
+                ((pad_left, pad_right), (pad_bottom, pad_top)),
+                mode="constant",
+                constant_values=1,
+            )
+
+        patch = patch_mat.astype(np.float32, copy=False).ravel()
         obs_parts.append(patch)
 
         # -------------------------------------------------
