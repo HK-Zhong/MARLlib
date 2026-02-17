@@ -5,7 +5,7 @@ from marllib.patch.rllib.utils.simple_env import SimpleEnv, make_env
 from marllib.envs.base_env.my_env.Scenario1 import Scenario
 
 
-class raw_env(SimpleEnv):
+class RawEnv(SimpleEnv):
     def __init__(self, agent_num=3, local_ratio=0.5, max_cycles=25, continuous_actions=False):
         assert 0. <= local_ratio <= 1., "local_ratio is a proportion. Must be between 0 and 1."
         scenario = Scenario()
@@ -14,5 +14,5 @@ class raw_env(SimpleEnv):
         self.metadata['name'] = "uwb_planning_env"
 
 
-env = make_env(raw_env)
+env = make_env(RawEnv)
 parallel_env = parallel_wrapper_fn(env)
