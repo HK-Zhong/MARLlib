@@ -1,5 +1,7 @@
 import numpy as np
-from marllib.envs.base_env.my_env.utils import BaseScenario, Agent, UWBPlanningWorld
+from marllib.envs.base_env.my_env.world_base import UWBPlanningWorld
+from marllib.envs.base_env.my_env.mpe_core import BaseScenario, Agent
+
 
 
 class Scenario(BaseScenario):
@@ -94,93 +96,87 @@ class Scenario(BaseScenario):
                 unsafe = 1
 
         # -------------------------
-        # Combine terms
+        # Target completion shaping (team-level signal)
         # -------------------------
-        W_INFO = 5.0
+        team_new_targets = int(getattr(world, "team_new_targets_found", 0))
+        all_found = bool(world.all_targets_found()) if hasattr(world, "all_targets_found") else False
+
+        # -------------------------
+        # Region proximity shaping (dense guidance)
+        # Vectorized using cached world._region_centers (real coords)
+        # -------------------------
+        region_bonus = 0.0
+        if hasattr(world, "_region_centers") and hasattr(world, "target_found"):
+            ax, ay = agent.state.p_pos
+            found_mask = np.array(world.target_found, dtype=bool)
+            if world._region_centers.shape[0] == found_mask.shape[0]:
+                centers = world._region_centers[~found_mask]
+            else:
+                centers = world._region_centers
+
+            if centers.size > 0:
+                dx = centers[:, 0] - float(ax)
+                dy = centers[:, 1] - float(ay)
+                dist_sq = dx * dx + dy * dy
+                min_dist = float(np.sqrt(dist_sq.min()))
+
+                # normalize by map diagonal
+                max_dist = float(np.sqrt(2.0) * (world.map_size_m / 2.0))
+                region_bonus = 1.0 - min_dist / max(max_dist, 1e-6)
+
+        # -------------------------
+        # Optimized weights (Version A: task-driven)
+        # -------------------------
+        W_INFO = 0.5  # exploration reduced
         W_VISIBLE = 0.1
         W_COLLIDE = 1.0
         W_UNSAFE = 0.5
         W_STEP = 0.01
+        W_TARGET = 8.0  # stronger target discovery
+        W_DONE_BONUS = 80.0  # strong completion bonus
+        W_REGION = 1.0  # dense guidance toward target region
 
         rew = 0.0
         rew += W_INFO * info_gain
         rew += W_VISIBLE * (num_visible / float(total_anchors))
+        rew += W_REGION * float(region_bonus)
         rew -= W_COLLIDE * float(collisions)
         rew -= W_UNSAFE * float(unsafe)
         rew -= W_STEP
+        rew += W_TARGET * float(team_new_targets)
+        if all_found:
+            rew += W_DONE_BONUS
 
         return float(rew)
 
     def global_reward(self, world):
+        """Simplified cooperative global reward (team-level).
+
+        Keeps ONLY signals that truly reflect cooperation:
+        + team-level newly found hidden targets (shared success)
+        + strong completion bonus when all targets are found
+        - inter-agent collision penalty (coordination)
+
+        Note: Exploration shaping, visible-anchor shaping, safety penalty, step penalty,
+        and region proximity shaping are handled in per-agent `reward()`.
         """
-        Cooperative exploration global reward (team-level):
-
-        + TEAM information gain: union of newly discovered free cells across agents
-        + small shaping: average number of visible UWB anchors
-        - inter-agent collisions (pairwise)
-        - optional safety penalty (count unsafe agents)
-        - small step penalty
-        """
-        # -------------------------
-        # TEAM information gain (incremental, summed over agents)
-        # Note: This sums per-agent newly discovered cells and may over-count
-        # overlaps if multiple agents discover the same cell in the same step.
-        # It is fast and works well as a cooperative shaping signal.
-        # -------------------------
-        denom = float(max(world.grid_size * world.grid_size, 1))
-        team_new_free = 0
-        for agent in world.agents:
-            team_new_free += int(getattr(agent, "last_new_free_count", 0))
-
-        # Prevent extreme spikes if overlaps occur
-        team_new_free = min(team_new_free, int(denom))
-        info_gain_team = (float(team_new_free) / denom) if denom > 0 else 0.0
 
         # -------------------------
-        # Visible anchors shaping (average, query only)
+        # Team target discovery / completion
         # -------------------------
-        total_anchors = max(len(getattr(world, "uwb_locations", {})), 1)
-        visible_sum = 0.0
-        for agent in world.agents:
-            visible_ids = agent.last_visible_uwb_ids
-            visible_sum += float(len(visible_ids)) / float(total_anchors)
-        visible_avg = visible_sum / float(max(len(world.agents), 1))
+        team_new_targets = int(getattr(world, "team_new_targets_found", 0))
+        all_found = bool(world.all_targets_found()) if hasattr(world, "all_targets_found") else False
 
         # -------------------------
-        # Global collision penalty (pairwise)
+        # Cooperative weights
         # -------------------------
-        collisions = 0
-        n = len(world.agents)
-        for i in range(n):
-            for j in range(i + 1, n):
-                if self.is_collision(world.agents[i], world.agents[j]):
-                    collisions += 1
-
-        # -------------------------
-        # Optional global safety penalty (count unsafe agents)
-        # -------------------------
-        unsafe_count = 0
-        if hasattr(world, "is_safe"):
-            for agent in world.agents:
-                x_real, y_real = agent.state.p_pos
-                if not world.is_safe(float(x_real), float(y_real)):
-                    unsafe_count += 1
-
-        # -------------------------
-        # Combine terms
-        # -------------------------
-        W_TEAM_INFO = 8.0
-        W_VISIBLE = 0.2
-        W_COLLIDE = 1.0
-        W_UNSAFE = 0.2
-        W_STEP = 0.01
+        W_TARGET = 15.0  # strong shared signal for discovering targets
+        W_DONE_BONUS = 150.0  # strong terminal reward
 
         rew = 0.0
-        rew += W_TEAM_INFO * info_gain_team
-        rew += W_VISIBLE * visible_avg
-        rew -= W_COLLIDE * float(collisions)
-        rew -= W_UNSAFE * float(unsafe_count)
-        rew -= W_STEP
+        rew += W_TARGET * float(team_new_targets)
+        if all_found:
+            rew += W_DONE_BONUS
 
         return float(rew)
 
@@ -221,9 +217,17 @@ class Scenario(BaseScenario):
         obs_parts = [pos_norm, vel_norm, num_visible_norm]
 
         # -------------------------------------------------
+        # 2.5) Global visible fuzzy target regions (low-res)
+        # Same for all agents (shared prior)
+        # -------------------------------------------------
+        if hasattr(world, "get_target_regions_lowres"):
+            region_low = world.get_target_regions_lowres().astype(np.float32, copy=False).ravel()
+            obs_parts.append(region_low)
+
+        # -------------------------------------------------
         # 3) Fixed-size local perceived grid map patch
         # -------------------------------------------------
-        PATCH_RADIUS = 7  # grid cells -> (2*7+1)=15, patch dim=225 (reasonable for MLP)
+        PATCH_RADIUS = 5  # grid cells -> (2*7+1)=15, patch dim=225 (reasonable for MLP)
         gx, gy = world.to_grid(pos[0], pos[1])
 
         # Vectorized patch extraction with padding (outside map treated as unknown=1)
@@ -260,3 +264,9 @@ class Scenario(BaseScenario):
         # 4) Concatenate into 1D observation
         # -------------------------------------------------
         return np.concatenate(obs_parts, axis=0)
+
+    def done(self, agent, world):
+        # Episode ends immediately when all hidden true targets are found
+        if hasattr(world, "all_targets_found"):
+            return bool(world.all_targets_found())
+        return False
