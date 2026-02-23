@@ -6,7 +6,7 @@ from marllib.envs.base_env.my_env.Scenario1 import Scenario
 
 
 class RawEnv(SimpleEnv):
-    def __init__(self, agent_num=3, local_ratio=0.5, max_cycles=25, continuous_actions=False):
+    def __init__(self, agent_num=3, local_ratio=0.5, max_cycles=200, continuous_actions=False):
         assert 0. <= local_ratio <= 1., "local_ratio is a proportion. Must be between 0 and 1."
         scenario = Scenario()
         world = scenario.make_world(agent_num)

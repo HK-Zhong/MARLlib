@@ -75,7 +75,7 @@ class RLlibUWBPlanningEnv(MultiAgentEnv):
             "space_act": self.action_space,
             "num_agents": self.num_agents,
             "agents": self.agents,
-            "episode_limit": 25,
+            "episode_limit": 20,
             "policy_mapping_info": policy_mapping_dict
         }
         return env_info

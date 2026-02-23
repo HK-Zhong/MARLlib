@@ -163,7 +163,6 @@ class WorldTargetsMixIn:
         # thr_sq = float(self.target_reach_dist_m) ** 2
         thr_sq = self.target_reach_dist_m
 
-
         newly_found_mask = np.zeros((unfinished_idx.size,), dtype=bool)
 
         # Any agent can complete any target (team-level)
@@ -225,6 +224,26 @@ class WorldTargetsMixIn:
             low[lx0:lx1 + 1, ly0:ly1 + 1] = 1
 
         return low
+
+    # -------------------------------------------------
+    # Convenience metrics
+    # -------------------------------------------------
+    def get_targets_remaining(self):
+        """Return the number of unfinished targets."""
+        if not self.target_found:
+            return int(getattr(self, "num_targets", 0))
+        # target_found is a python list of bool
+        return int(len(self.target_found) - sum(1 for f in self.target_found if f))
+
+    def get_completion_ratio(self):
+        """Return completion ratio in [0, 1]."""
+        total = int(getattr(self, "num_targets", 0))
+        if total <= 0:
+            return 0.0
+        if not self.target_found:
+            return 0.0
+        done = float(sum(1 for f in self.target_found if f))
+        return float(done / total)
 
     # -------------------------------------------------
     # Completion check

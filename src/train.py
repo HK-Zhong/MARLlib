@@ -23,10 +23,10 @@ model = marl.build_model(env, mappo,
 # start training
 mappo.fit(
     env, model,
-    stop={'timesteps_total': 100000},
+    stop={'timesteps_total': 1000000},
     share_policy='group',
     checkpoint_freq=100,
-    num_workers=8,
+    num_workers=1,
     num_envs_per_worker=4,
     num_gpus=0,
     seed=0,

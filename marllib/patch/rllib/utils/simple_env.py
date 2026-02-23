@@ -6,6 +6,10 @@ from pettingzoo import AECEnv
 from pettingzoo.utils import wrappers
 from pettingzoo.utils.agent_selector import agent_selector
 
+import os
+import json
+from datetime import datetime
+
 
 def make_env(raw_env):
     def env(**kwargs):
@@ -74,6 +78,17 @@ class SimpleEnv(AECEnv):
 
         self.viewer = None
 
+        # -------------------------------------------------
+        # Custom metric file logger (writes JSONL)
+        # -------------------------------------------------
+        self._custom_metric_log_path = self._init_custom_metric_logger()
+        # Episode-grouped buffer (one JSON line per episode)
+        self._custom_metric_episode_idx = 0
+        self._custom_metric_episode_records = []
+        # Step counters for logging
+        self._custom_metric_step_in_episode = 0
+        self._custom_metric_global_step = 0
+
     def observation_space(self, agent):
         return self.observation_spaces[agent]
 
@@ -91,6 +106,15 @@ class SimpleEnv(AECEnv):
         return np.concatenate(states, axis=None)
 
     def reset(self):
+        # Flush unfinished episode records (if any) before resetting
+        try:
+            self._flush_custom_metrics_episode(done=False)
+        except Exception:
+            pass
+
+        # Reset per-episode step counter on reset
+        self._custom_metric_step_in_episode = 0
+
         self.scenario.reset_world(self.world, self.np_random)
 
         self.agents = self.possible_agents[:]
@@ -105,6 +129,96 @@ class SimpleEnv(AECEnv):
         self.steps = 0
 
         self.current_actions = [None] * self.num_agents
+
+    # -------------------------------------------------
+    # Custom metric logging (independent of RLlib infos)
+    # -------------------------------------------------
+    def _find_project_root(self):
+        """Try to locate project root containing `exp_results` directory."""
+        cur = os.path.abspath(os.path.dirname(__file__))
+        for _ in range(10):
+            if os.path.isdir(os.path.join(cur, "exp_results")):
+                return cur
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur = parent
+        # fallback: go up to MARLlib root (best effort)
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
+
+    def _init_custom_metric_logger(self):
+        """Create log directory and a new timestamped json file, return its path."""
+        root = self._find_project_root()
+        log_dir = os.path.join(root, "exp_results", "custom_metric")
+        os.makedirs(log_dir, exist_ok=True)
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        path = os.path.join(log_dir, f"{ts}.json")
+        # Create the file eagerly so users can see it immediately
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("")
+        except Exception:
+            pass
+        return path
+
+    def _collect_custom_metrics_once(self):
+        """Collect one metrics record into the in-memory episode buffer."""
+        metrics = getattr(self.world, "last_metrics", {}) or {}
+
+        # Step counters (per-episode and global)
+        self._custom_metric_step_in_episode = int(getattr(self, "_custom_metric_step_in_episode", 0)) + 1
+        self._custom_metric_global_step = int(getattr(self, "_custom_metric_global_step", 0)) + 1
+
+        record = {
+            "wall_time": datetime.now().isoformat(timespec="seconds"),
+            "env_step": int(self._custom_metric_step_in_episode),
+            "global_step": int(self._custom_metric_global_step),
+            "completion_ratio": float(metrics.get("completion_ratio", 0.0)),
+            "team_new_targets_found": int(metrics.get("team_new_targets_found", 0)),
+            "episode_steps_to_done": int(metrics.get("episode_steps_to_done", -1)),
+            "first_target_time": int(metrics.get("first_target_time", -1)),
+            "last_target_time": int(metrics.get("last_target_time", -1)),
+            "role_balance": float(metrics.get("role_balance", 0.0)),
+            "overlap_ratio": float(metrics.get("overlap_ratio", 0.0)),
+            "collision_count_team": int(metrics.get("collision_count_team", 0)),
+            "new_cell_visits_team": int(metrics.get("new_cell_visits_team", 0)),
+            "unsafe_ratio": float(metrics.get("unsafe_ratio", 0.0)),
+        }
+
+        if not hasattr(self, "_custom_metric_episode_records") or self._custom_metric_episode_records is None:
+            self._custom_metric_episode_records = []
+        self._custom_metric_episode_records.append(record)
+
+    def _flush_custom_metrics_episode(self, done=False):
+        """Flush current episode buffer as ONE dict (one line) into the json file."""
+        path = getattr(self, "_custom_metric_log_path", None)
+        if not path:
+            self._custom_metric_log_path = self._init_custom_metric_logger()
+            path = self._custom_metric_log_path
+
+        records = getattr(self, "_custom_metric_episode_records", None) or []
+        if len(records) == 0:
+            return
+
+        ep_idx = int(getattr(self, "_custom_metric_episode_idx", 0))
+        episode_obj = {
+            "episode": ep_idx,
+            "done": bool(done),
+            "num_steps": int(len(records)),
+            "records": records,
+        }
+
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(episode_obj, ensure_ascii=False) + "\n")
+        except Exception:
+            # Avoid crashing training due to logging failures
+            pass
+
+        # Reset buffer for next episode
+        self._custom_metric_episode_idx = ep_idx + 1
+        self._custom_metric_episode_records = []
+        self._custom_metric_step_in_episode = 0
 
     def _execute_world_step(self):
         # set action for each agent
@@ -189,9 +303,20 @@ class SimpleEnv(AECEnv):
         if next_idx == 0:
             self._execute_world_step()
             self.steps += 1
+            # Collect custom metrics once per environment step (not per agent)
+            self._collect_custom_metrics_once()
+
+            # Apply max-cycles termination first
             if self.steps >= self.max_cycles:
                 for a in self.agents:
                     self.dones[a] = True
+
+            # If episode terminates, flush episode group
+            try:
+                if all(self.dones.values()):
+                    self._flush_custom_metrics_episode(done=True)
+            except Exception:
+                pass
         else:
             self._clear_rewards()
 
