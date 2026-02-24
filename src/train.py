@@ -1,7 +1,5 @@
 import os
 from marllib import marl
-import marllib
-print(marllib.__file__)
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 

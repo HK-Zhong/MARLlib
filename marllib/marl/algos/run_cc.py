@@ -26,6 +26,7 @@ from ray import tune
 from ray.rllib.utils.framework import try_import_tf, try_import_torch
 from marllib.marl.algos.scripts import POlICY_REGISTRY
 from marllib.marl.common import recursive_dict_update, dict_update
+from src.uwb_callback import UWBCustomMetricsCallbacks
 
 torch, nn = try_import_torch()
 
@@ -174,7 +175,8 @@ def run_cc(exp_info, env, model, stop=None):
         },
         "framework": exp_info["framework"],
         "evaluation_interval": exp_info["evaluation_interval"],
-        "simple_optimizer": False  # force using better optimizer
+        "simple_optimizer": False,  # force using better optimizer
+        "callbacks": UWBCustomMetricsCallbacks
     }
 
     stop_config = {

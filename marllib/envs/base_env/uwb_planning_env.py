@@ -30,6 +30,7 @@ class RLlibUWBPlanningEnv(MultiAgentEnv):
         env = ss.pad_observations_v0(env)
         env = ss.pad_action_space_v0(env)
 
+        # 已经是parallel_env了
         self.env = ParallelPettingZooEnv(env)
         self.action_space = self.env.action_space
         self.observation_space = GymDict({"obs": Box(
