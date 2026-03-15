@@ -1,5 +1,6 @@
 import os
 from marllib import marl
+from src.uwb_callback import UWBCustomMetricsCallbacks
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
@@ -12,7 +13,7 @@ mappo = marl.algos.mappo(hyperparam_source='mpe')
 print(type(mappo))
 
 # build agent model based on env + algorithms + user preference
-# return: (model, model_config)
+# return: (model(deep learning model), model_config)
 model = marl.build_model(env, mappo,
                          {"core_arch": "mlp", "encode_layer": "128-256"})
 
@@ -31,5 +32,6 @@ mappo.fit(
     evaluation_interval=10,
     evaluation_num_episodes=10,
     evaluation_config={"explore": False},
+    callbacks=UWBCustomMetricsCallbacks
     # local_dir="/home/coolas-fly/MARLlib/nohup_results/ray_results",
 )

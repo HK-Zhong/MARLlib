@@ -21,7 +21,10 @@ class WorldTargetsMixIn:
         # one region per target (1:1 mapping)
         self.num_regions = int(self.num_targets)
 
-        # region size = 5% of total map area
+        # 	•	6m：偏难
+        # 	•	8m：中等偏难
+        # 	•	10m：当前默认
+        # 	•	12m：更容易
         self.region_size_m = 10
 
         self.region_downsample = 5
