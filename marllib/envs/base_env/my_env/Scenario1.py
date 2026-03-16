@@ -14,6 +14,12 @@ class Scenario(BaseScenario):
         self._unsafe_steps = 0
         self._prev_target_found = None
         self._agent_target_counts = None
+        self._prev_region_min_dist = None
+        self._reward_target_total = 0.0
+        self._reward_region_total = 0.0
+        self._reward_explore_total = 0.0
+        self._reward_safety_total = 0.0
+        self._reward_collision_total = 0.0
 
     def make_world(self, agent_num=3):
         world = UWBPlanningWorld(map_size=50.0, map_resolution=0.5)
@@ -78,6 +84,14 @@ class Scenario(BaseScenario):
         # Per-agent target attribution (for role_balance)
         n_agents = len(getattr(world, "agents", []))
         self._agent_target_counts = np.zeros((n_agents,), dtype=np.int32)
+        self._prev_region_min_dist = np.full((n_agents,), np.nan, dtype=np.float32)
+
+        # Reset reward accumulators for episode-level diagnostics
+        self._reward_target_total = 0.0
+        self._reward_region_total = 0.0
+        self._reward_explore_total = 0.0
+        self._reward_safety_total = 0.0
+        self._reward_collision_total = 0.0
 
         # Store metrics on world for logging/debug
         world.last_metrics = {}
@@ -216,6 +230,11 @@ class Scenario(BaseScenario):
             "collision_count_team": int(collision_count_team),
             "new_cell_visits_team": int(new_cell_visits_team),
             "unsafe_ratio": float(unsafe_ratio),
+            "reward_target_total": float(self._reward_target_total),
+            "reward_region_total": float(self._reward_region_total),
+            "reward_explore_total": float(self._reward_explore_total),
+            "reward_safety_total": float(self._reward_safety_total),
+            "reward_collision_total": float(self._reward_collision_total),
         }
 
     def reward(self, agent, world):
@@ -264,16 +283,12 @@ class Scenario(BaseScenario):
                 unsafe = 1
 
         # -------------------------
-        # Target completion shaping (team-level signal)
+        # Region progress shaping (dense guidance, but weak)
+        # Use progress toward nearest unfinished region center instead of
+        # absolute proximity reward, which is easier to exploit by hovering.
         # -------------------------
-        team_new_targets = int(getattr(world, "team_new_targets_found", 0))
-        all_found = bool(world.all_targets_found()) if hasattr(world, "all_targets_found") else False
-
-        # -------------------------
-        # Region proximity shaping (dense guidance)
-        # Vectorized using cached world._region_centers (real coords)
-        # -------------------------
-        region_bonus = 0.0
+        region_progress = 0.0
+        cur_min_dist = np.nan
         if hasattr(world, "_region_centers") and hasattr(world, "target_found"):
             ax, ay = agent.state.p_pos
             found_mask = np.array(world.target_found, dtype=bool)
@@ -286,34 +301,60 @@ class Scenario(BaseScenario):
                 dx = centers[:, 0] - float(ax)
                 dy = centers[:, 1] - float(ay)
                 dist_sq = dx * dx + dy * dy
-                min_dist = float(np.sqrt(dist_sq.min()))
+                cur_min_dist = float(np.sqrt(dist_sq.min()))
 
-                # normalize by map diagonal
-                max_dist = float(np.sqrt(2.0) * (world.map_size_m / 2.0))
-                region_bonus = 1.0 - min_dist / max(max_dist, 1e-6)
+                try:
+                    agent_idx = int(agent.name.split("_")[-1])
+                except Exception:
+                    agent_idx = 0
+
+                if (
+                    self._prev_region_min_dist is not None
+                    and 0 <= agent_idx < len(self._prev_region_min_dist)
+                    and np.isfinite(self._prev_region_min_dist[agent_idx])
+                ):
+                    prev_dist = float(self._prev_region_min_dist[agent_idx])
+                    # Positive when moving closer, negative when moving away.
+                    region_progress = prev_dist - cur_min_dist
+
+                if self._prev_region_min_dist is not None and 0 <= agent_idx < len(self._prev_region_min_dist):
+                    self._prev_region_min_dist[agent_idx] = cur_min_dist
 
         # -------------------------
-        # Optimized weights (Version A: task-driven)
+        # Optimized weights (task-driven, target-centric)
         # -------------------------
-        W_INFO = 0.5  # exploration reduced
-        W_VISIBLE = 0.1
+        W_INFO = 0.1
+        W_VISIBLE = 0.0
         W_COLLIDE = 1.0
         W_UNSAFE = 0.5
-        W_STEP = 0.01
-        W_TARGET = 8.0  # stronger target discovery
-        W_DONE_BONUS = 80.0  # strong completion bonus
-        W_REGION = 1.0  # dense guidance toward target region
+        W_STEP = 0.02
+        W_REGION = 0.5
+
+        # -------------------------
+        # Reward components (for episode-level diagnostics)
+        # NOTE:
+        # - Target discovery / completion reward is handled ONLY in global_reward().
+        # - Local reward only provides weak shaping and penalties.
+        # -------------------------
+        reward_explore = W_INFO * info_gain + W_VISIBLE * (num_visible / float(total_anchors)) - W_STEP
+        reward_region = W_REGION * float(region_progress)
+        reward_collision = -W_COLLIDE * float(collisions)
+        reward_safety = -W_UNSAFE * float(unsafe)
+        reward_target = 0.0
 
         rew = 0.0
-        rew += W_INFO * info_gain
-        rew += W_VISIBLE * (num_visible / float(total_anchors))
-        rew += W_REGION * float(region_bonus)
-        rew -= W_COLLIDE * float(collisions)
-        rew -= W_UNSAFE * float(unsafe)
-        rew -= W_STEP
-        rew += W_TARGET * float(team_new_targets)
-        if all_found:
-            rew += W_DONE_BONUS
+        rew += reward_explore
+        rew += reward_region
+        rew += reward_collision
+        rew += reward_safety
+        rew += reward_target
+
+        # Episode-level diagnostic accumulators (sum over all agent reward calls)
+        self._reward_explore_total += float(reward_explore)
+        self._reward_region_total += float(reward_region)
+        self._reward_collision_total += float(reward_collision)
+        self._reward_safety_total += float(reward_safety)
+        self._reward_target_total += float(reward_target)
 
         return float(rew)
 
@@ -328,26 +369,29 @@ class Scenario(BaseScenario):
         Note: Exploration shaping, visible-anchor shaping, safety penalty, step penalty,
         and region proximity shaping are handled in per-agent `reward()`.
         """
-
-        # Update per-step metrics once (Scenario-level)
-        self._update_metrics_once_per_step(world)
-
         # -------------------------
         # Team target discovery / completion
         # -------------------------
+
         team_new_targets = int(getattr(world, "team_new_targets_found", 0))
         all_found = bool(world.all_targets_found()) if hasattr(world, "all_targets_found") else False
 
         # -------------------------
-        # Cooperative weights
+        # Cooperative weights (global-only target success reward)
         # -------------------------
-        W_TARGET = 15.0  # strong shared signal for discovering targets
-        W_DONE_BONUS = 150.0  # strong terminal reward
+        W_TARGET = 20.0
+        W_DONE_BONUS = 200.0
 
         rew = 0.0
         rew += W_TARGET * float(team_new_targets)
         if all_found:
             rew += W_DONE_BONUS
+
+        # Count global cooperative reward into target-related diagnostics
+        self._reward_target_total += float(rew)
+
+        # Update per-step metrics once after all reward components are accumulated
+        self._update_metrics_once_per_step(world)
 
         return float(rew)
 
@@ -368,6 +412,13 @@ class Scenario(BaseScenario):
         # -------------------------------------------------
         visible_ids = agent.last_visible_uwb_ids
         num_visible = len(visible_ids)
+
+        # -------------------------------------------------
+        # 1.5) Update visible target map (targets become visible when
+        #      they enter the agent perception range)
+        # -------------------------------------------------
+        if hasattr(world, "update_target_visibility_for_agent"):
+            world.update_target_visibility_for_agent(agent)
 
         # -------------------------------------------------
         # 2) Normalize agent kinematics (real-world coordinates)
@@ -428,7 +479,30 @@ class Scenario(BaseScenario):
                 constant_values=1,
             )
 
-        patch = patch_mat.astype(np.float32, copy=False).ravel()
+        # -------------------------------------------------
+        # 3.5) Merge visible target patch into local perceived patch
+        # Three-valued local map:
+        #   0 = known free cell
+        #   1 = unknown / unobserved / padded area
+        #   2 = currently visible unfinished target cell
+        # -------------------------------------------------
+        if getattr(agent, "perceived_target_map", None) is None:
+            agent.perceived_target_map = np.zeros_like(agent.perceived_grid_map, dtype=np.uint8)
+
+        target_patch_mat = agent.perceived_target_map[sx0:sx1, sy0:sy1]
+
+        if pad_left or pad_right or pad_bottom or pad_top:
+            target_patch_mat = np.pad(
+                target_patch_mat,
+                ((pad_left, pad_right), (pad_bottom, pad_top)),
+                mode="constant",
+                constant_values=0,
+            )
+
+        merged_patch_mat = patch_mat.astype(np.float32, copy=True)
+        merged_patch_mat[target_patch_mat > 0] = 2.0
+
+        patch = merged_patch_mat.astype(np.float32, copy=False).ravel()
         obs_parts.append(patch)
 
         # -------------------------------------------------

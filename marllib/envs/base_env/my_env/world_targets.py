@@ -30,7 +30,7 @@ class WorldTargetsMixIn:
         self.region_downsample = 5
 
         # distance judging whether agent has reached goal
-        self.target_reach_dist_m = 1.0
+        self.target_reach_dist_m = 2.0
 
         # target / region containers
         self.target_regions_real = []
@@ -163,8 +163,8 @@ class WorldTargetsMixIn:
             return
 
         target_xy_u = target_xy[unfinished_idx]  # (M, 2)
-        # thr_sq = float(self.target_reach_dist_m) ** 2
-        thr_sq = self.target_reach_dist_m
+        thr_sq = float(self.target_reach_dist_m) ** 2
+        # thr_sq = self.target_reach_dist_m
 
         newly_found_mask = np.zeros((unfinished_idx.size,), dtype=bool)
 
@@ -253,3 +253,42 @@ class WorldTargetsMixIn:
     # -------------------------------------------------
     def all_targets_found(self):
         return bool(self.target_found) and all(self.target_found)
+
+    def update_target_visibility_for_agent(self, agent):
+        """
+        Update agent.perceived_target_map:
+        - 1 means a target is currently visible (within perception range)
+        - 0 means not visible
+        Only unfinished targets are considered.
+        """
+
+        if agent.perceived_target_map is None:
+            agent.perceived_target_map = np.zeros_like(self.grid_map, dtype=np.uint8)
+
+        # 每次重新计算当前可见 target
+        agent.perceived_target_map.fill(0)
+
+        if not hasattr(self, "target_points_real") or not hasattr(self, "target_points_grid"):
+            return
+
+        if len(self.target_points_real) == 0:
+            return
+
+        ax, ay = agent.state.p_pos
+        pr = float(getattr(agent, "perception_range", 0.0))
+        pr_sq = pr * pr
+
+        for i, (tx, ty) in enumerate(self.target_points_real):
+            # 已完成 target 不再显示
+            if hasattr(self, "target_found") and self.target_found[i]:
+                continue
+
+            dx = float(tx) - float(ax)
+            dy = float(ty) - float(ay)
+            dist_sq = dx * dx + dy * dy
+
+            # 最简版：只用欧氏距离判断是否可见
+            if dist_sq <= pr_sq:
+                gx, gy = self.target_points_grid[i]
+                if 0 <= gx < self.grid_size and 0 <= gy < self.grid_size:
+                    agent.perceived_target_map[gx, gy] = 1

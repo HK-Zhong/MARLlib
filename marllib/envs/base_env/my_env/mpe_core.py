@@ -91,5 +91,9 @@ class Agent(Entity):  # properties of agent entities
         self.perceived_grid_map = None
         self.prev_perceived_grid_map = None
         self.last_visible_uwb_ids = []
+
+        # visible target map (0=not visible, 1=visible target cell)
+        self.perceived_target_map = None
+
         # agent-specific visited grid map (0=unvisited, 1=visited). Used for new_free_count.
         self.visited_grid_map = None

@@ -40,6 +40,12 @@ METRIC_SPEC: Dict[str, str] = {
     "collision_count_team": "sum",
     "new_cell_visits_team": "sum",
     "unsafe_ratio": "mean",
+
+    "reward_target_total": "last",
+    "reward_region_total": "last",
+    "reward_explore_total": "last",
+    "reward_safety_total": "last",
+    "reward_collision_total": "last",
 }
 
 
