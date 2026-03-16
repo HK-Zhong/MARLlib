@@ -84,7 +84,7 @@ class Agent(Entity):  # properties of agent entities
         self.action_callback = None
 
         # agent perception range
-        self.perception_range = 5
+        self.perception_range = 3.0
         self.max_speed = 3.0
 
         # agent-specific perceived occupancy grid (initialized in UWBPlanningWorld)

@@ -163,8 +163,6 @@ class WorldTargetsMixIn:
             return
 
         target_xy_u = target_xy[unfinished_idx]  # (M, 2)
-        thr_sq = float(self.target_reach_dist_m) ** 2
-        # thr_sq = self.target_reach_dist_m
 
         newly_found_mask = np.zeros((unfinished_idx.size,), dtype=bool)
 
@@ -177,6 +175,8 @@ class WorldTargetsMixIn:
             dx = target_xy_u[:, 0] - ax
             dy = target_xy_u[:, 1] - ay
             dist_sq = dx * dx + dy * dy
+
+            thr_sq = float(getattr(agent, "perception_range", 3.0))
 
             newly_found_mask |= (dist_sq <= thr_sq)
 
@@ -275,8 +275,7 @@ class WorldTargetsMixIn:
             return
 
         ax, ay = agent.state.p_pos
-        pr = float(getattr(agent, "perception_range", 0.0))
-        pr_sq = pr * pr
+        pr_sq = float(getattr(agent, "perception_range", 3.0))
 
         for i, (tx, ty) in enumerate(self.target_points_real):
             # 已完成 target 不再显示

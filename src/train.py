@@ -19,10 +19,12 @@ model = marl.build_model(env, mappo,
 
 # 输出一下model的内容（测试用）
 
+timesteps_total = 2000000
+
 # start training
 mappo.fit(
     env, model,
-    stop={'timesteps_total': 1000000},
+    stop={'timesteps_total': timesteps_total},
     share_policy='group',
     checkpoint_freq=100,
     num_workers=8,

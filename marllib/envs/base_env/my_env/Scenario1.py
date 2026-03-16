@@ -449,7 +449,7 @@ class Scenario(BaseScenario):
         # -------------------------------------------------
         # 3) Fixed-size local perceived grid map patch
         # -------------------------------------------------
-        PATCH_RADIUS = 5  # grid cells -> (2*7+1)=15, patch dim=225 (reasonable for MLP)
+        PATCH_RADIUS = 7  # grid cells -> (2*7+1)=15, patch dim=225 (reasonable for MLP)
         gx, gy = world.to_grid(pos[0], pos[1])
 
         # Vectorized patch extraction with padding (outside map treated as unknown=1)
