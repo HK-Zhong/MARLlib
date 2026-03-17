@@ -176,7 +176,9 @@ class WorldTargetsMixIn:
             dy = target_xy_u[:, 1] - ay
             dist_sq = dx * dx + dy * dy
 
-            thr_sq = float(getattr(agent, "perception_range", 3.0))
+            # Completion/reach radius should be based on target_reach_dist_m,
+            # not the visibility perception range.
+            thr_sq = float(getattr(self, "target_reach_dist_m", 2.0)) ** 2
 
             newly_found_mask |= (dist_sq <= thr_sq)
 
@@ -275,7 +277,8 @@ class WorldTargetsMixIn:
             return
 
         ax, ay = agent.state.p_pos
-        pr_sq = float(getattr(agent, "perception_range", 3.0))
+        pr = float(getattr(agent, "perception_range", 5.0))
+        pr_sq = pr * pr
 
         for i, (tx, ty) in enumerate(self.target_points_real):
             # 已完成 target 不再显示
