@@ -402,19 +402,12 @@ class Scenario(BaseScenario):
         Observation = [
             normalized agent position (2),          in [-1, 1] roughly
             normalized agent velocity (2),          scaled by a constant(max velocity)
-            normalized number of visible anchors (1),
             flattened local perceived grid map patch ( (2R+1) x (2R+1) )
         ]
         """
 
         # -------------------------------------------------
-        # 1) Update perceived map using UWB LOS (belief update)
-        # -------------------------------------------------
-        visible_ids = agent.last_visible_uwb_ids
-        num_visible = len(visible_ids)
-
-        # -------------------------------------------------
-        # 1.5) Update visible target map (targets become visible when
+        # 1) Update visible target map (targets become visible when
         #      they enter the agent perception range)
         # -------------------------------------------------
         if hasattr(world, "update_target_visibility_for_agent"):
@@ -432,11 +425,7 @@ class Scenario(BaseScenario):
         vel = agent.state.p_vel.astype(np.float32)
         vel_norm = vel / agent.max_speed
 
-        # visible anchors normalization: scale by total anchors (avoid magnitude mismatch)
-        total_anchors = max(len(getattr(world, "uwb_locations", {})), 1)
-        num_visible_norm = np.array([num_visible / float(total_anchors)], dtype=np.float32)
-
-        obs_parts = [pos_norm, vel_norm, num_visible_norm]
+        obs_parts = [pos_norm, vel_norm]
 
         # -------------------------------------------------
         # 2.5) Global visible fuzzy target regions (low-res)
