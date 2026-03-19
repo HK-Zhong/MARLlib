@@ -30,7 +30,7 @@ class WorldTargetsMixIn:
         self.region_downsample = 5
 
         # distance judging whether agent has reached goal
-        self.target_reach_dist_m = 2.0
+        self.target_reach_dist_m = 3.0
 
         # target / region containers
         self.target_regions_real = []
@@ -68,6 +68,8 @@ class WorldTargetsMixIn:
 
         if hasattr(self, "_target_points_real_array"):
             delattr(self, "_target_points_real_array")
+
+        used_target_grids = set()
 
         half = float(self.map_size_m / 2.0)
         region_half = float(self.region_size_m / 2.0)
@@ -108,6 +110,9 @@ class WorldTargetsMixIn:
             (tg, tr) = _sample_free_in_region(xmin, xmax, ymin, ymax)
             if tg is None:
                 continue
+            # Ensure each target occupies a unique grid cell.
+            if tg in used_target_grids:
+                continue
 
             rid = len(self.target_regions_real)
 
@@ -115,6 +120,7 @@ class WorldTargetsMixIn:
             centers_list.append((0.5 * (xmin + xmax), 0.5 * (ymin + ymax)))
 
             self.target_points_grid.append(tg)
+            used_target_grids.add(tg)
             self.target_points_real.append(tr)
 
             self.target_found.append(False)

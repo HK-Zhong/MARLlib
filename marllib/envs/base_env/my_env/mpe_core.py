@@ -97,3 +97,6 @@ class Agent(Entity):  # properties of agent entities
 
         # agent-specific visited grid map (0=unvisited, 1=visited). Used for new_free_count.
         self.visited_grid_map = None
+
+        # 上一次离目标的最短距离
+        self.prev_min_target_dist = None

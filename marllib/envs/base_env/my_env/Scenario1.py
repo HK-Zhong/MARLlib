@@ -96,6 +96,13 @@ class Scenario(BaseScenario):
         # Store metrics on world for logging/debug
         world.last_metrics = {}
 
+        # Reset visible target progress tracking for all agents
+        for a in getattr(world, "agents", []):
+            a.prev_min_target_dist = None
+            a.current_target_grid = None
+            if hasattr(a, "current_target_id"):
+                a.current_target_id = None
+
     def _update_metrics_once_per_step(self, world):
         """Compute and store metrics ONCE per env step.
 
@@ -309,9 +316,9 @@ class Scenario(BaseScenario):
                     agent_idx = 0
 
                 if (
-                    self._prev_region_min_dist is not None
-                    and 0 <= agent_idx < len(self._prev_region_min_dist)
-                    and np.isfinite(self._prev_region_min_dist[agent_idx])
+                        self._prev_region_min_dist is not None
+                        and 0 <= agent_idx < len(self._prev_region_min_dist)
+                        and np.isfinite(self._prev_region_min_dist[agent_idx])
                 ):
                     prev_dist = float(self._prev_region_min_dist[agent_idx])
                     # Positive when moving closer, negative when moving away.
@@ -319,6 +326,68 @@ class Scenario(BaseScenario):
 
                 if self._prev_region_min_dist is not None and 0 <= agent_idx < len(self._prev_region_min_dist):
                     self._prev_region_min_dist[agent_idx] = cur_min_dist
+
+        # -------------------------
+        # Visible target progress reward (locked target + anti-jitter)
+        # Lock by target grid coordinate instead of transient visible-list index.
+        # Reset tracking when the locked target disappears or is completed.
+        # -------------------------
+        reward_visible_target = 0.0
+
+        if not hasattr(agent, "current_target_grid"):
+            agent.current_target_grid = None
+
+        if hasattr(agent, "perceived_target_map"):
+            visible_targets = np.argwhere(agent.perceived_target_map == 1)
+
+            if len(visible_targets) > 0:
+                ax, ay = agent.state.p_pos
+
+                # Convert visible target list to a set of stable grid-coordinate keys.
+                visible_keys = {(int(gx_t), int(gy_t)) for gx_t, gy_t in visible_targets}
+
+                # If the previously locked target is no longer visible, drop it.
+                if agent.current_target_grid is not None:
+                    cur_key = (int(agent.current_target_grid[0]), int(agent.current_target_grid[1]))
+                    if cur_key not in visible_keys:
+                        agent.current_target_grid = None
+                        agent.prev_min_target_dist = None
+
+                # Acquire a target only when unlocked.
+                if agent.current_target_grid is None:
+                    best_key = None
+                    best_d2 = None
+                    for gx_t, gy_t in visible_targets:
+                        tx, ty = world.to_real(int(gx_t), int(gy_t))
+                        dx = tx - ax
+                        dy = ty - ay
+                        d2 = dx * dx + dy * dy
+                        if best_d2 is None or d2 < best_d2:
+                            best_d2 = d2
+                            best_key = (int(gx_t), int(gy_t))
+                    agent.current_target_grid = best_key
+                    agent.prev_min_target_dist = None
+
+                # Compute reward only if a locked visible target exists.
+                if agent.current_target_grid is not None:
+                    gx_t, gy_t = int(agent.current_target_grid[0]), int(agent.current_target_grid[1])
+                    tx, ty = world.to_real(gx_t, gy_t)
+
+                    dx = tx - ax
+                    dy = ty - ay
+                    dist = np.sqrt(dx * dx + dy * dy)
+
+                    if getattr(agent, "prev_min_target_dist", None) is None:
+                        agent.prev_min_target_dist = dist
+                    else:
+                        delta = agent.prev_min_target_dist - dist
+                        delta = np.clip(delta, -1.0, 1.0)
+                        reward_visible_target += 2.0 * delta
+                        agent.prev_min_target_dist = dist
+            else:
+                # No visible target -> fully reset tracking.
+                agent.prev_min_target_dist = None
+                agent.current_target_grid = None
 
         # -------------------------
         # Optimized weights (task-driven, target-centric)
@@ -340,7 +409,7 @@ class Scenario(BaseScenario):
         reward_region = W_REGION * float(region_progress)
         reward_collision = -W_COLLIDE * float(collisions)
         reward_safety = -W_UNSAFE * float(unsafe)
-        reward_target = 0.0
+        reward_target = reward_visible_target
 
         rew = 0.0
         rew += reward_explore
