@@ -464,6 +464,76 @@ class Scenario(BaseScenario):
 
         return float(rew)
 
+    def global_state(self, world):
+        """
+        Build a compact centralized global state for critic use.
+
+        Composition:
+        1) all agents' normalized pos/vel
+        2) all targets' normalized real positions (ground-truth, critic-only)
+        3) target_found vector (ground-truth completion flags)
+
+        Returned shape:
+            [global_state_dim, ]
+        """
+        state_parts = []
+        state_debug_parts = []
+
+        # -------------------------------------------------
+        # 1) All agents' normalized position and velocity
+        # -------------------------------------------------
+        half_map = float(world.map_size_m) / 2.0
+        agent_kinematics = []
+        for a in getattr(world, "agents", []):
+            pos = a.state.p_pos.astype(np.float32) / max(half_map, 1e-6)
+            vel = a.state.p_vel.astype(np.float32) / max(float(a.max_speed), 1e-6)
+            agent_kinematics.append(np.concatenate([pos, vel], axis=0))
+
+        if len(agent_kinematics) > 0:
+            all_agent_pos_vel = np.concatenate(agent_kinematics, axis=0).astype(np.float32, copy=False)
+        else:
+            all_agent_pos_vel = np.zeros((0,), dtype=np.float32)
+
+        state_parts.append(all_agent_pos_vel)
+        state_debug_parts.append(("all_agent_pos_vel", tuple(all_agent_pos_vel.shape)))
+
+        # -------------------------------------------------
+        # 2) All targets' normalized real positions (critic-only full state)
+        # -------------------------------------------------
+        tpr = getattr(world, "target_points_real", None)
+        if tpr is None or len(tpr) == 0:
+            target_pos_vec = np.zeros((0,), dtype=np.float32)
+        else:
+            target_pos = np.asarray(tpr, dtype=np.float32).reshape(-1, 2)
+            target_pos_norm = target_pos / max(half_map, 1e-6)
+            target_pos_vec = target_pos_norm.ravel().astype(np.float32, copy=False)
+
+        state_parts.append(target_pos_vec)
+        state_debug_parts.append(("target_pos_vec", tuple(target_pos_vec.shape)))
+
+        # -------------------------------------------------
+        # 3) Ground-truth target completion vector
+        # -------------------------------------------------
+        tf = getattr(world, "target_found", None)
+        if tf is None:
+            target_found_vec = np.zeros((0,), dtype=np.float32)
+        else:
+            target_found_vec = np.asarray(tf, dtype=np.float32).ravel()
+
+        state_parts.append(target_found_vec)
+        state_debug_parts.append(("target_found_vec", tuple(target_found_vec.shape)))
+
+        global_state = np.concatenate(state_parts, axis=0).astype(np.float32, copy=False)
+
+        if not hasattr(self, "_global_state_debug_printed"):
+            print("\n[GLOBAL STATE DEBUG] components:")
+            for name, shape in state_debug_parts:
+                print(f"  - {name}: {shape}")
+            print("[GLOBAL STATE DEBUG] total global_state shape:", global_state.shape)
+            self._global_state_debug_printed = True
+
+        return global_state
+
     def observation(self, agent, world):
         """
         Sample observation design (normalized + fixed patch).
@@ -495,6 +565,10 @@ class Scenario(BaseScenario):
         vel_norm = vel / agent.max_speed
 
         obs_parts = [pos_norm, vel_norm]
+        obs_debug_parts = [
+            ("pos_norm", tuple(pos_norm.shape)),
+            ("vel_norm", tuple(vel_norm.shape)),
+        ]
 
         # -------------------------------------------------
         # 2.5) Global visible fuzzy target regions (low-res)
@@ -503,6 +577,7 @@ class Scenario(BaseScenario):
         if hasattr(world, "get_target_regions_lowres"):
             region_low = world.get_target_regions_lowres().astype(np.float32, copy=False).ravel()
             obs_parts.append(region_low)
+            obs_debug_parts.append(("region_low", tuple(region_low.shape)))
 
         # -------------------------------------------------
         # 3) Fixed-size local perceived grid map patch
@@ -562,11 +637,21 @@ class Scenario(BaseScenario):
 
         patch = merged_patch_mat.astype(np.float32, copy=False).ravel()
         obs_parts.append(patch)
+        obs_debug_parts.append(("local_patch", tuple(patch.shape)))
 
         # -------------------------------------------------
         # 4) Concatenate into 1D observation
         # -------------------------------------------------
-        return np.concatenate(obs_parts, axis=0)
+        obs = np.concatenate(obs_parts, axis=0)
+
+        if not hasattr(self, "_obs_debug_printed"):
+            print("\n[OBS DEBUG] observation components:")
+            for name, shape in obs_debug_parts:
+                print(f"  - {name}: {shape}")
+            print("[OBS DEBUG] total obs shape:", obs.shape)
+            self._obs_debug_printed = True
+
+        return obs
 
     def done(self, agent, world):
         # Episode ends immediately when all hidden true targets are found

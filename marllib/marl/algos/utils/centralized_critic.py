@@ -55,7 +55,47 @@ def centralized_critic_postprocessing(policy,
     algorithm = custom_config["algorithm"]
     opp_action_in_cc = custom_config["opp_action_in_cc"]
     global_state_flag = custom_config["global_state_flag"]
+    # print("global_state_flag: ", global_state_flag)  False
+    # print("opp_action_in_cc: ", opp_action_in_cc) True
+
     mask_flag = custom_config["mask_flag"]
+
+    # ================= DEBUG: SampleBatch contents =================
+    print("\n[DEBUG] ===== SampleBatch Keys =====")
+    print(sample_batch.keys())
+
+    for k in sample_batch.keys():
+        try:
+            v = sample_batch[k]
+            print(f"[DEBUG] Key: {k}")
+            print(f"  type: {type(v)}")
+            if hasattr(v, "shape"):
+                print(f"  shape: {v.shape}")
+            elif isinstance(v, list):
+                print(f"  len: {len(v)}")
+                if len(v) > 0:
+                    print(f"  first element type: {type(v[0])}")
+                    print(f"  first element: {v[0]}")
+            else:
+                print(f"  value: {v}")
+
+            # Special handling for infos (usually list of dict)
+            if k == "infos" and isinstance(v, list) and len(v) > 0:
+                print("  [infos DEBUG]")
+                print(f"  infos[0]: {v[0]}")
+                if isinstance(v[0], dict):
+                    print(f"  keys in infos[0]: {list(v[0].keys())}")
+                    if "global_state" in v[0]:
+                        gs = v[0]["global_state"]
+                        print(f"  global_state type: {type(gs)}")
+                        if hasattr(gs, "shape"):
+                            print(f"  global_state shape: {gs.shape}")
+                        else:
+                            print(f"  global_state: {gs}")
+        except Exception as e:
+            print(f"[DEBUG ERROR] key={k}, error={e}")
+
+    print("[DEBUG] =================================\n")
 
     if mask_flag:
         action_mask_dim = custom_config["space_act"].n

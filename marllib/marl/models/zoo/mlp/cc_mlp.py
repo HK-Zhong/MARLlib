@@ -99,8 +99,15 @@ class CentralizedCriticMLP(BaseMLP):
     def central_value_function(self, state, opponent_actions=None) -> TensorType:
         assert self._features is not None, "must call forward() first"
         B = state.shape[0]
+        if not hasattr(self, "_debug_printed"):
+            print("\n[DEBUG] state shape:", state.shape)
 
         x = self.cc_vf_encoder(state)
+        if not hasattr(self, "_debug_printed"):
+            print("[DEBUG] encoded obs shape:", x.shape)
+
+        if not hasattr(self, "_debug_printed") and opponent_actions is not None:
+            print("[DEBUG] opponent_actions shape:", opponent_actions.shape)
 
         if opponent_actions is None:
             x = torch.cat([x.reshape(B, -1)], 1)
@@ -127,10 +134,15 @@ class CentralizedCriticMLP(BaseMLP):
                     range(self.n_agents - 1)]
 
             x = torch.cat([x.reshape(B, -1)] + opponent_actions_ls, 1)
+            if not hasattr(self, "_debug_printed"):
+                print("[DEBUG] critic input x shape:", x.shape)
 
         if self.q_flag:
             return torch.reshape(self.cc_vf_branch(x), [-1, self.num_outputs])
         else:
+            if not hasattr(self, "_debug_printed"):
+                print("[DEBUG] value output shape:", self.cc_vf_branch(x).shape)
+                self._debug_printed = True
             return torch.reshape(self.cc_vf_branch(x), [-1])
 
     @override(BaseMLP)

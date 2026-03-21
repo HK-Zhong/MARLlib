@@ -90,17 +90,26 @@ class BaseMLP(TorchModelV2, nn.Module):
 
         if self.custom_config["global_state_flag"] or self.custom_config["mask_flag"]:
             flat_inputs = input_dict["obs"]["obs"].float()
+            if not hasattr(self, "_debug_actor_printed"):
+                print("\n[ACTOR DEBUG] raw obs shape:", flat_inputs.shape)
             # Convert action_mask into a [0.0 || -inf]-type mask.
             if self.custom_config["mask_flag"]:
                 action_mask = input_dict["obs"]["action_mask"]
                 inf_mask = torch.clamp(torch.log(action_mask), min=FLOAT_MIN)
         else:
             flat_inputs = input_dict["obs"]["obs"].float()
+            if not hasattr(self, "_debug_actor_printed"):
+                print("\n[ACTOR DEBUG] raw obs shape:", flat_inputs.shape)
 
         self.inputs = flat_inputs
         self._features = self.p_encoder(self.inputs)
+        if not hasattr(self, "_debug_actor_printed"):
+            print("[ACTOR DEBUG] encoded obs shape:", self._features.shape)
 
         output = self.p_branch(self._features)
+        if not hasattr(self, "_debug_actor_printed"):
+            print("[ACTOR DEBUG] logits/action output shape:", output.shape)
+            self._debug_actor_printed = True
 
         if self.custom_config["mask_flag"]:
             output = output + inf_mask
