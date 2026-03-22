@@ -20,6 +20,7 @@ class Scenario(BaseScenario):
         self._reward_explore_total = 0.0
         self._reward_safety_total = 0.0
         self._reward_collision_total = 0.0
+        self._reward_repeat_total = 0.0
 
     def make_world(self, agent_num=3):
         world = UWBPlanningWorld(map_size=50.0, map_resolution=0.5)
@@ -92,6 +93,7 @@ class Scenario(BaseScenario):
         self._reward_explore_total = 0.0
         self._reward_safety_total = 0.0
         self._reward_collision_total = 0.0
+        self._reward_repeat_total = 0.0
 
         # Store metrics on world for logging/debug
         world.last_metrics = {}
@@ -243,6 +245,7 @@ class Scenario(BaseScenario):
             "reward_explore_total": float(self._reward_explore_total),
             "reward_safety_total": float(self._reward_safety_total),
             "reward_collision_total": float(self._reward_collision_total),
+            "reward_repeat_total": float(self._reward_repeat_total),
         }
 
     def reward(self, agent, world):
@@ -418,6 +421,7 @@ class Scenario(BaseScenario):
         W_STEP = 0.02
         W_REGION = 0.5
         W_TARGET_DISCOVERY = 1.0
+        W_REPEAT_MARGIN = 0.05
 
         # -------------------------
         # Reward components (for episode-level diagnostics)
@@ -434,12 +438,23 @@ class Scenario(BaseScenario):
         reward_safety = -W_UNSAFE * float(unsafe)
         reward_target = reward_visible_target + W_TARGET_DISCOVERY * reward_target_discovery
 
+        # Lightweight repeated-exploration penalty:
+        # If the agent is not seeing a target, discovers no new free cells,
+        # and is not making region progress, punish this more strongly than
+        # the region-progress penalty alone. This encourages the agent to leave
+        # stale trajectories and search new cells, even if that means moving
+        # away from the current region center.
+        reward_repeat = 0.0
+        if (not has_visible_target) and (new_free == 0) and (region_progress <= 0.0):
+            reward_repeat = -(abs(reward_region) + W_REPEAT_MARGIN)
+
         rew = 0.0
         rew += reward_explore
         rew += reward_region
         rew += reward_collision
         rew += reward_safety
         rew += reward_target
+        rew += reward_repeat
 
         # Episode-level diagnostic accumulators (sum over all agent reward calls)
         self._reward_explore_total += float(reward_explore)
@@ -447,6 +462,7 @@ class Scenario(BaseScenario):
         self._reward_collision_total += float(reward_collision)
         self._reward_safety_total += float(reward_safety)
         self._reward_target_total += float(reward_target)
+        self._reward_repeat_total += float(reward_repeat)
 
         return float(rew)
 

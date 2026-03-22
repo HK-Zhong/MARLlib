@@ -36,7 +36,8 @@ class UWBPlanningWorld(WorldMapMixin, WorldUWBMixIn, WorldTargetsMixIn):  # mult
         self.dim_color = 3
         # simulation timestep
         self.dt = 0.2
-        self.perception_range = 3.0
+        self.perception_range = 5.0
+        self.target_reach_dist_m = 3.0
 
         # =====================================================
         # Grid map / obstacle representation (WorldMapMixin)
@@ -51,7 +52,7 @@ class UWBPlanningWorld(WorldMapMixin, WorldUWBMixIn, WorldTargetsMixIn):  # mult
         # =====================================================
         # Target regions & hidden goals (WorldTargetsMixIn)
         # =====================================================
-        self._init_target_members(num_targets=10, target_reach_dist_m=self.perception_range)
+        self._init_target_members(num_targets=10, target_reach_dist_m=self.target_reach_dist_m)
 
         # unified map initialization
         self.map_init()
