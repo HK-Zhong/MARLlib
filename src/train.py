@@ -15,7 +15,7 @@ print(type(mappo))
 # build agent model based on env + algorithms + user preference
 # return: (model(deep learning model), model_config)
 model = marl.build_model(env, mappo,
-                         {"core_arch": "mlp", "encode_layer": "128-256"})
+                         {"core_arch": "mlp", "encode_layer": "256-512"})
 
 # 输出一下model的内容（测试用）
 

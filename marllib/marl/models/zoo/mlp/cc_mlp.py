@@ -21,7 +21,7 @@
 # SOFTWARE.
 
 import numpy as np
-from gym.spaces import Box, MultiDiscrete, Dict
+from gym.spaces import Box, MultiDiscrete
 from functools import reduce
 from torch.nn.utils import parameters_to_vector, vector_to_parameters
 from ray.rllib.models.torch.misc import SlimFC, normc_initializer
@@ -50,33 +50,15 @@ class CentralizedCriticMLP(BaseMLP):
         super().__init__(obs_space, action_space, num_outputs, model_config,
                          name, **kwargs)
 
-        # ------------------------------------------------------------------
-        # Critic-only global state space.
-        # We append global_state (42 dims) to the tail of each flat observation,
-        # but the centralized critic encoder should ONLY consume this 42-dim tail.
-        #
-        # Current hard-coded layout:
-        #   actor_obs_dim   = 629
-        #   critic_state_dim = 42
-        # ------------------------------------------------------------------
-        self.full_obs_space = Dict({
-            "state": Box(
-                low=-np.inf,
-                high=np.inf,
-                shape=(42,),
-                dtype=np.float32,
-            )
-        })
-
         # encoder for centralized VF
         self.cc_vf_encoder = CentralizedEncoder(model_config, self.full_obs_space)
 
         # Central VF
         if self.custom_config["opp_action_in_cc"]:
             if isinstance(self.custom_config["space_act"], Box):  # continuous
-                input_size = self.cc_vf_encoder.output_dim + num_outputs * (self.n_agents - 1) // 2
+                input_size = self.cc_vf_encoder.output_dim
             else:
-                input_size = self.cc_vf_encoder.output_dim + num_outputs * (self.n_agents - 1)
+                input_size = self.cc_vf_encoder.output_dim
         else:
             input_size = self.cc_vf_encoder.output_dim
 
@@ -118,7 +100,7 @@ class CentralizedCriticMLP(BaseMLP):
         assert self._features is not None, "must call forward() first"
         B = state.shape[0]
         if not hasattr(self, "_debug_printed"):
-            print("\n[Critic DEBUG] state shape:", state.shape)
+            print("\n[Critic DEBUG] original state shape:", state.shape)
 
         x = self.cc_vf_encoder(state)
         if not hasattr(self, "_debug_printed"):
@@ -151,7 +133,7 @@ class CentralizedCriticMLP(BaseMLP):
                     for i in
                     range(self.n_agents - 1)]
 
-            x = torch.cat([x.reshape(B, -1)] + opponent_actions_ls, 1)
+            # x = torch.cat([x.reshape(B, -1)] + opponent_actions_ls, 1)
             if not hasattr(self, "_debug_printed"):
                 print("[Critic DEBUG] critic input x shape:", x.shape)
 
