@@ -100,6 +100,7 @@ class Scenario(BaseScenario):
         for a in getattr(world, "agents", []):
             a.prev_min_target_dist = None
             a.current_target_grid = None
+            a.prev_visible_target_count = 0
             if hasattr(a, "current_target_id"):
                 a.current_target_id = None
 
@@ -328,6 +329,15 @@ class Scenario(BaseScenario):
                     self._prev_region_min_dist[agent_idx] = cur_min_dist
 
         # -------------------------
+        # Visible target flags / one-time discovery bonus
+        # -------------------------
+        has_visible_target = False
+        reward_target_discovery = 0.0
+
+        if not hasattr(agent, "prev_visible_target_count"):
+            agent.prev_visible_target_count = 0
+
+        # -------------------------
         # Visible target progress reward (locked target + anti-jitter)
         # Lock by target grid coordinate instead of transient visible-list index.
         # Reset tracking when the locked target disappears or is completed.
@@ -339,6 +349,12 @@ class Scenario(BaseScenario):
 
         if hasattr(agent, "perceived_target_map"):
             visible_targets = np.argwhere(agent.perceived_target_map == 1)
+            cur_visible_count = int(len(visible_targets))
+            has_visible_target = cur_visible_count > 0
+
+            newly_visible = max(cur_visible_count - int(getattr(agent, "prev_visible_target_count", 0)), 0)
+            if newly_visible > 0:
+                reward_target_discovery += float(newly_visible)
 
             if len(visible_targets) > 0:
                 ax, ay = agent.state.p_pos
@@ -388,6 +404,9 @@ class Scenario(BaseScenario):
                 # No visible target -> fully reset tracking.
                 agent.prev_min_target_dist = None
                 agent.current_target_grid = None
+                agent.prev_visible_target_count = 0
+
+            agent.prev_visible_target_count = cur_visible_count if has_visible_target else 0
 
         # -------------------------
         # Optimized weights (task-driven, target-centric)
@@ -398,6 +417,7 @@ class Scenario(BaseScenario):
         W_UNSAFE = 0.5
         W_STEP = 0.02
         W_REGION = 0.5
+        W_TARGET_DISCOVERY = 1.0
 
         # -------------------------
         # Reward components (for episode-level diagnostics)
@@ -405,11 +425,14 @@ class Scenario(BaseScenario):
         # - Target discovery / completion reward is handled ONLY in global_reward().
         # - Local reward only provides weak shaping and penalties.
         # -------------------------
+        if has_visible_target:
+            region_progress = 0.0
+
         reward_explore = W_INFO * info_gain + W_VISIBLE * (num_visible / float(total_anchors)) - W_STEP
         reward_region = W_REGION * float(region_progress)
         reward_collision = -W_COLLIDE * float(collisions)
         reward_safety = -W_UNSAFE * float(unsafe)
-        reward_target = reward_visible_target
+        reward_target = reward_visible_target + W_TARGET_DISCOVERY * reward_target_discovery
 
         rew = 0.0
         rew += reward_explore
