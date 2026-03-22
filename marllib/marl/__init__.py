@@ -308,6 +308,7 @@ class _Algo:
         self.config_dict = recursive_dict_update(self.config_dict, running_params)
 
         self.config_dict['algorithm'] = self.name
+        print("self.algo_type: ", self.algo_type)
 
         if self.algo_type == "IL":
             return run_il(self.config_dict, env_instance, model_class, stop=stop)

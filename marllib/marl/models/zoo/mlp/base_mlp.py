@@ -48,6 +48,7 @@ class BaseMLP(TorchModelV2, nn.Module):
         TorchModelV2.__init__(self, obs_space, action_space, num_outputs,
                               model_config, name)
         nn.Module.__init__(self)
+        self.local_obs_dim = 629
 
         # decide the model arch
         self.custom_config = model_config["custom_model_config"]
@@ -90,23 +91,23 @@ class BaseMLP(TorchModelV2, nn.Module):
 
         if self.custom_config["global_state_flag"] or self.custom_config["mask_flag"]:
             flat_inputs = input_dict["obs"]["obs"].float()
-            actor_obs = flat_inputs[:, :629]
+            actor_obs = flat_inputs[:, :self.local_obs_dim]
             if not hasattr(self, "_debug_actor_printed"):
-                print("\n[ACTOR DEBUG] raw obs shape:", actor_obs.shape)
+                print("\n[ACTOR DEBUG] actor input shape:", actor_obs.shape)
             # Convert action_mask into a [0.0 || -inf]-type mask.
             if self.custom_config["mask_flag"]:
                 action_mask = input_dict["obs"]["action_mask"]
                 inf_mask = torch.clamp(torch.log(action_mask), min=FLOAT_MIN)
         else:
             flat_inputs = input_dict["obs"]["obs"].float()
-            actor_obs = flat_inputs[:, :629]
+            actor_obs = flat_inputs[:, :self.local_obs_dim]
             if not hasattr(self, "_debug_actor_printed"):
-                print("\n[ACTOR DEBUG] raw obs shape:", actor_obs.shape)
+                print("\n[ACTOR DEBUG] actor input shape:", actor_obs.shape)
 
         self.inputs = actor_obs
         self._features = self.p_encoder(self.inputs)
         if not hasattr(self, "_debug_actor_printed"):
-            print("[ACTOR DEBUG] encoded obs shape:", self._features.shape)
+            print("[ACTOR DEBUG] encoded actor shape:", self._features.shape)
 
         output = self.p_branch(self._features)
         if not hasattr(self, "_debug_actor_printed"):

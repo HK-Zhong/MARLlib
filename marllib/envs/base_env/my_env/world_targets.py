@@ -14,7 +14,7 @@ class WorldTargetsMixIn:
     # -------------------------------------------------
     # Target member initialization
     # -------------------------------------------------
-    def _init_target_members(self, num_targets=10):
+    def _init_target_members(self, num_targets=10, target_reach_dist_m=3.0):
         # number of true hidden targets
         self.num_targets = int(num_targets)
 
@@ -30,7 +30,7 @@ class WorldTargetsMixIn:
         self.region_downsample = 5
 
         # distance judging whether agent has reached goal
-        self.target_reach_dist_m = 3.0
+        self.target_reach_dist_m = target_reach_dist_m
 
         # target / region containers
         self.target_regions_real = []

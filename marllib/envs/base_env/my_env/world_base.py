@@ -36,6 +36,7 @@ class UWBPlanningWorld(WorldMapMixin, WorldUWBMixIn, WorldTargetsMixIn):  # mult
         self.dim_color = 3
         # simulation timestep
         self.dt = 0.2
+        self.perception_range = 3.0
 
         # =====================================================
         # Grid map / obstacle representation (WorldMapMixin)
@@ -50,7 +51,7 @@ class UWBPlanningWorld(WorldMapMixin, WorldUWBMixIn, WorldTargetsMixIn):  # mult
         # =====================================================
         # Target regions & hidden goals (WorldTargetsMixIn)
         # =====================================================
-        self._init_target_members(num_targets=10)
+        self._init_target_members(num_targets=10, target_reach_dist_m=self.perception_range)
 
         # unified map initialization
         self.map_init()
@@ -133,6 +134,9 @@ class UWBPlanningWorld(WorldMapMixin, WorldUWBMixIn, WorldTargetsMixIn):  # mult
         for agent in self.agents:
             # reset velocities
             agent.state.p_vel = np.zeros(self.dim_p, dtype=np.float32)
+
+            # reset perception_range
+            agent.perception_range = self.perception_range
 
             # reset actions (velocity command + comm)
             agent.action.u = np.zeros(self.dim_p, dtype=np.float32)

@@ -466,12 +466,16 @@ class Scenario(BaseScenario):
 
     def global_state(self, world):
         """
-        Build a compact centralized global state for critic use.
+        Build a richer centralized global state for critic use.
 
         Composition:
         1) all agents' normalized pos/vel
         2) all targets' normalized real positions (ground-truth, critic-only)
         3) target_found vector (ground-truth completion flags)
+        4) each target's distance to the nearest agent
+        5) low-resolution global visited map (team coverage summary)
+        6) each target's current visibility flag (visible to any agent)
+        7) each agent's distance to the nearest unfinished target
 
         Returned shape:
             [global_state_dim, ]
@@ -522,6 +526,92 @@ class Scenario(BaseScenario):
 
         state_parts.append(target_found_vec)
         state_debug_parts.append(("target_found_vec", tuple(target_found_vec.shape)))
+
+        # -------------------------------------------------
+        # 4) Each target's distance to the nearest agent
+        # -------------------------------------------------
+        if len(getattr(world, "agents", [])) > 0 and tpr is not None and len(tpr) > 0:
+            agent_xy = np.array([a.state.p_pos for a in world.agents], dtype=np.float32).reshape(-1, 2)
+            target_xy = np.asarray(tpr, dtype=np.float32).reshape(-1, 2)
+            diff = target_xy[:, None, :] - agent_xy[None, :, :]              # [T, A, 2]
+            dists = np.linalg.norm(diff, axis=-1)                            # [T, A]
+            nearest_agent_dist = dists.min(axis=1).astype(np.float32)        # [T]
+            nearest_agent_dist = nearest_agent_dist / max(float(world.map_size_m), 1e-6)
+        else:
+            nearest_agent_dist = np.zeros((0,), dtype=np.float32)
+
+        state_parts.append(nearest_agent_dist)
+        state_debug_parts.append(("nearest_agent_dist", tuple(nearest_agent_dist.shape)))
+
+        # -------------------------------------------------
+        # 5) Low-resolution global visited map (team coverage summary)
+        #    Use union of all agents' visited_grid_map, then average-pool to 10x10.
+        # -------------------------------------------------
+        visited_union = None
+        for a in getattr(world, "agents", []):
+            v = getattr(a, "visited_grid_map", None)
+            if v is None:
+                continue
+            v_bin = (np.asarray(v) > 0).astype(np.float32)
+            if visited_union is None:
+                visited_union = v_bin.copy()
+            else:
+                visited_union = np.maximum(visited_union, v_bin)
+
+        if visited_union is None:
+            visited_low = np.zeros((100,), dtype=np.float32)
+        else:
+            gh, gw = visited_union.shape
+            out_h, out_w = 10, 10
+            block_h = max(gh // out_h, 1)
+            block_w = max(gw // out_w, 1)
+            trimmed = visited_union[:block_h * out_h, :block_w * out_w]
+            pooled = trimmed.reshape(out_h, block_h, out_w, block_w).mean(axis=(1, 3))
+            visited_low = pooled.astype(np.float32, copy=False).ravel()
+
+        state_parts.append(visited_low)
+        state_debug_parts.append(("visited_low", tuple(visited_low.shape)))
+
+        # -------------------------------------------------
+        # 6) Each target's current visibility flag (visible to any agent)
+        # -------------------------------------------------
+        if tpr is not None and len(tpr) > 0 and len(getattr(world, "agents", [])) > 0:
+            target_visible_any = np.zeros((len(tpr),), dtype=np.float32)
+            for a in world.agents:
+                ptm = getattr(a, "perceived_target_map", None)
+                if ptm is None:
+                    continue
+                for tid, (gx_t, gy_t) in enumerate(getattr(world, "target_points_grid", [])):
+                    if 0 <= int(gx_t) < ptm.shape[0] and 0 <= int(gy_t) < ptm.shape[1]:
+                        if ptm[int(gx_t), int(gy_t)] > 0:
+                            target_visible_any[tid] = 1.0
+        else:
+            target_visible_any = np.zeros((0,), dtype=np.float32)
+
+        state_parts.append(target_visible_any)
+        state_debug_parts.append(("target_visible_any", tuple(target_visible_any.shape)))
+
+        # -------------------------------------------------
+        # 7) Each agent's distance to the nearest unfinished target
+        # -------------------------------------------------
+        if len(getattr(world, "agents", [])) > 0 and tpr is not None and len(tpr) > 0:
+            found_mask = np.asarray(tf, dtype=bool).ravel() if tf is not None else np.zeros((len(tpr),), dtype=bool)
+            target_xy = np.asarray(tpr, dtype=np.float32).reshape(-1, 2)
+            unfinished_xy = target_xy[~found_mask] if found_mask.shape[0] == target_xy.shape[0] else target_xy
+
+            if unfinished_xy.shape[0] > 0:
+                agent_xy = np.array([a.state.p_pos for a in world.agents], dtype=np.float32).reshape(-1, 2)
+                diff = agent_xy[:, None, :] - unfinished_xy[None, :, :]       # [A, T_unfinished, 2]
+                dists = np.linalg.norm(diff, axis=-1)                          # [A, T_unfinished]
+                agent_to_nearest_unfinished = dists.min(axis=1).astype(np.float32)
+                agent_to_nearest_unfinished = agent_to_nearest_unfinished / max(float(world.map_size_m), 1e-6)
+            else:
+                agent_to_nearest_unfinished = np.zeros((len(world.agents),), dtype=np.float32)
+        else:
+            agent_to_nearest_unfinished = np.zeros((0,), dtype=np.float32)
+
+        state_parts.append(agent_to_nearest_unfinished)
+        state_debug_parts.append(("agent_to_nearest_unfinished", tuple(agent_to_nearest_unfinished.shape)))
 
         global_state = np.concatenate(state_parts, axis=0).astype(np.float32, copy=False)
 
