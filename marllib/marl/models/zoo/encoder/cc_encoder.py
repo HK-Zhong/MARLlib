@@ -56,10 +56,14 @@ class CentralizedEncoder(nn.Module):
                     encoder_layer_dim.append(out_dim)
 
             self.encoder_layer_dim = encoder_layer_dim
-            if "state" not in obs_space.spaces:
-                input_dim = self.num_agents * obs_space['obs'].shape[0]
+            if "state" in obs_space.spaces and "obs" in obs_space.spaces:
+                input_dim = obs_space["state"].shape[0] + obs_space["obs"].shape[0]
+            elif "state" in obs_space.spaces:
+                input_dim = obs_space["state"].shape[0]
             else:
-                input_dim = obs_space['state'].shape[0] + obs_space['obs'].shape[0]
+                input_dim = self.num_agents * obs_space["obs"].shape[0]
+            if not hasattr(self, "_debug_printed"):
+                print("\n[CC Encoder DEBUG] input_dim size: ", input_dim)
             for out_dim in self.encoder_layer_dim:
                 layers.append(
                     SlimFC(in_size=input_dim,
@@ -67,6 +71,7 @@ class CentralizedEncoder(nn.Module):
                            initializer=normc_initializer(1.0),
                            activation_fn=self.activation))
                 input_dim = out_dim
+
         elif "conv_layer" in self.custom_config["model_arch_args"]:
             if "state" not in obs_space.spaces:
                 self.state_dim = obs_space["obs"].shape
@@ -101,6 +106,7 @@ class CentralizedEncoder(nn.Module):
         else:
             self.output_dim = input_dim  # record
         self.encoder = nn.Sequential(*layers)
+        self._debug_printed = True
 
     def forward(self, inputs) -> (TensorType, List[TensorType]):
 

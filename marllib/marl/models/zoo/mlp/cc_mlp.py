@@ -21,7 +21,7 @@
 # SOFTWARE.
 
 import numpy as np
-from gym.spaces import Box, MultiDiscrete
+from gym.spaces import Box, MultiDiscrete, Dict
 from functools import reduce
 from torch.nn.utils import parameters_to_vector, vector_to_parameters
 from ray.rllib.models.torch.misc import SlimFC, normc_initializer
@@ -49,6 +49,24 @@ class CentralizedCriticMLP(BaseMLP):
 
         super().__init__(obs_space, action_space, num_outputs, model_config,
                          name, **kwargs)
+
+        # ------------------------------------------------------------------
+        # Critic-only global state space.
+        # We append global_state (42 dims) to the tail of each flat observation,
+        # but the centralized critic encoder should ONLY consume this 42-dim tail.
+        #
+        # Current hard-coded layout:
+        #   actor_obs_dim   = 629
+        #   critic_state_dim = 42
+        # ------------------------------------------------------------------
+        self.full_obs_space = Dict({
+            "state": Box(
+                low=-np.inf,
+                high=np.inf,
+                shape=(42,),
+                dtype=np.float32,
+            )
+        })
 
         # encoder for centralized VF
         self.cc_vf_encoder = CentralizedEncoder(model_config, self.full_obs_space)
@@ -100,14 +118,14 @@ class CentralizedCriticMLP(BaseMLP):
         assert self._features is not None, "must call forward() first"
         B = state.shape[0]
         if not hasattr(self, "_debug_printed"):
-            print("\n[DEBUG] state shape:", state.shape)
+            print("\n[Critic DEBUG] state shape:", state.shape)
 
         x = self.cc_vf_encoder(state)
         if not hasattr(self, "_debug_printed"):
-            print("[DEBUG] encoded obs shape:", x.shape)
+            print("[Critic DEBUG] encoded obs shape:", x.shape)
 
         if not hasattr(self, "_debug_printed") and opponent_actions is not None:
-            print("[DEBUG] opponent_actions shape:", opponent_actions.shape)
+            print("[Critic DEBUG] opponent_actions shape:", opponent_actions.shape)
 
         if opponent_actions is None:
             x = torch.cat([x.reshape(B, -1)], 1)
@@ -135,13 +153,13 @@ class CentralizedCriticMLP(BaseMLP):
 
             x = torch.cat([x.reshape(B, -1)] + opponent_actions_ls, 1)
             if not hasattr(self, "_debug_printed"):
-                print("[DEBUG] critic input x shape:", x.shape)
+                print("[Critic DEBUG] critic input x shape:", x.shape)
 
         if self.q_flag:
             return torch.reshape(self.cc_vf_branch(x), [-1, self.num_outputs])
         else:
             if not hasattr(self, "_debug_printed"):
-                print("[DEBUG] value output shape:", self.cc_vf_branch(x).shape)
+                print("[Critic DEBUG] value output shape:", self.cc_vf_branch(x).shape)
                 self._debug_printed = True
             return torch.reshape(self.cc_vf_branch(x), [-1])
 

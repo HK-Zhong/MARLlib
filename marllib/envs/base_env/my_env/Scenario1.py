@@ -642,16 +642,19 @@ class Scenario(BaseScenario):
         # -------------------------------------------------
         # 4) Concatenate into 1D observation
         # -------------------------------------------------
-        obs = np.concatenate(obs_parts, axis=0)
+        actor_obs = np.concatenate(obs_parts, axis=0).astype(np.float32)
+        global_state = self.global_state(world).astype(np.float32)
+
+        total_obs = np.concatenate([actor_obs, global_state], axis=0)
 
         if not hasattr(self, "_obs_debug_printed"):
             print("\n[OBS DEBUG] observation components:")
             for name, shape in obs_debug_parts:
                 print(f"  - {name}: {shape}")
-            print("[OBS DEBUG] total obs shape:", obs.shape)
+            print("[OBS DEBUG] total obs shape:", total_obs.shape)
             self._obs_debug_printed = True
 
-        return obs
+        return total_obs
 
     def done(self, agent, world):
         # Episode ends immediately when all hidden true targets are found

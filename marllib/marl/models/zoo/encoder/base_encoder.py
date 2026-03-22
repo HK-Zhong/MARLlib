@@ -55,7 +55,7 @@ class BaseEncoder(nn.Module):
                     encoder_layer_dim.append(out_dim)
 
             self.encoder_layer_dim = encoder_layer_dim
-            input_dim = obs_space['obs'].shape[0]
+            input_dim = obs_space['obs'].shape[0] - 42
             for out_dim in self.encoder_layer_dim:
                 layers.append(
                     SlimFC(in_size=input_dim,
