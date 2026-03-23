@@ -567,20 +567,23 @@ class Scenario(BaseScenario):
         """
         Build a richer centralized global state for critic use.
 
-        Composition:
-        1) all agents' normalized pos/vel
-        2) all targets' normalized real positions (ground-truth, critic-only)
-        3) target_found vector (ground-truth completion flags)
-        4) each target's distance to the nearest agent
-        5) low-resolution global visited map (team coverage summary)
-        6) each target's current visibility flag (visible to any agent)
-        7) each agent's distance to the nearest unfinished target
+        The information content is unchanged, but the final flattened layout is
+        reorganized into a more structured form for a future relational critic:
+
+        1) agent_tokens_flat
+           for each agent:
+             [pos_x, pos_y, vel_x, vel_y, dist_to_nearest_unfinished_target]
+
+        2) target_tokens_flat
+           for each target:
+             [target_x, target_y, found_flag, visible_flag, dist_to_nearest_agent]
+
+        3) global_aux_flat
+           [visited_low]
 
         Returned shape:
             [global_state_dim, ]
         """
-        state_parts = []
-        state_debug_parts = []
 
         # -------------------------------------------------
         # 1) All agents' normalized position and velocity
@@ -597,9 +600,6 @@ class Scenario(BaseScenario):
         else:
             all_agent_pos_vel = np.zeros((0,), dtype=np.float32)
 
-        state_parts.append(all_agent_pos_vel)
-        state_debug_parts.append(("all_agent_pos_vel", tuple(all_agent_pos_vel.shape)))
-
         # -------------------------------------------------
         # 2) All targets' normalized real positions (critic-only full state)
         # -------------------------------------------------
@@ -611,9 +611,6 @@ class Scenario(BaseScenario):
             target_pos_norm = target_pos / max(half_map, 1e-6)
             target_pos_vec = target_pos_norm.ravel().astype(np.float32, copy=False)
 
-        state_parts.append(target_pos_vec)
-        state_debug_parts.append(("target_pos_vec", tuple(target_pos_vec.shape)))
-
         # -------------------------------------------------
         # 3) Ground-truth target completion vector
         # -------------------------------------------------
@@ -622,9 +619,6 @@ class Scenario(BaseScenario):
             target_found_vec = np.zeros((0,), dtype=np.float32)
         else:
             target_found_vec = np.asarray(tf, dtype=np.float32).ravel()
-
-        state_parts.append(target_found_vec)
-        state_debug_parts.append(("target_found_vec", tuple(target_found_vec.shape)))
 
         # -------------------------------------------------
         # 4) Each target's distance to the nearest agent
@@ -638,9 +632,6 @@ class Scenario(BaseScenario):
             nearest_agent_dist = nearest_agent_dist / max(float(world.map_size_m), 1e-6)
         else:
             nearest_agent_dist = np.zeros((0,), dtype=np.float32)
-
-        state_parts.append(nearest_agent_dist)
-        state_debug_parts.append(("nearest_agent_dist", tuple(nearest_agent_dist.shape)))
 
         # -------------------------------------------------
         # 5) Low-resolution global visited map (team coverage summary)
@@ -668,9 +659,6 @@ class Scenario(BaseScenario):
             pooled = trimmed.reshape(out_h, block_h, out_w, block_w).mean(axis=(1, 3))
             visited_low = pooled.astype(np.float32, copy=False).ravel()
 
-        state_parts.append(visited_low)
-        state_debug_parts.append(("visited_low", tuple(visited_low.shape)))
-
         # -------------------------------------------------
         # 6) Each target's current visibility flag (visible to any agent)
         # -------------------------------------------------
@@ -686,9 +674,6 @@ class Scenario(BaseScenario):
                             target_visible_any[tid] = 1.0
         else:
             target_visible_any = np.zeros((0,), dtype=np.float32)
-
-        state_parts.append(target_visible_any)
-        state_debug_parts.append(("target_visible_any", tuple(target_visible_any.shape)))
 
         # -------------------------------------------------
         # 7) Each agent's distance to the nearest unfinished target
@@ -709,8 +694,52 @@ class Scenario(BaseScenario):
         else:
             agent_to_nearest_unfinished = np.zeros((0,), dtype=np.float32)
 
-        state_parts.append(agent_to_nearest_unfinished)
-        state_debug_parts.append(("agent_to_nearest_unfinished", tuple(agent_to_nearest_unfinished.shape)))
+        # -------------------------------------------------
+        # Structured packing for relational critic:
+        #   1) agent_tokens_flat
+        #   2) target_tokens_flat
+        #   3) global_aux_flat
+        # -------------------------------------------------
+        n_agents = len(getattr(world, "agents", []))
+        n_targets = len(tpr) if (tpr is not None) else 0
+
+        # agent_tokens: [A, 5] = [pos_x, pos_y, vel_x, vel_y, dist_to_nearest_unfinished_target]
+        if n_agents > 0 and all_agent_pos_vel.size == n_agents * 4 and agent_to_nearest_unfinished.size == n_agents:
+            agent_pos_vel = all_agent_pos_vel.reshape(n_agents, 4)
+            agent_dist = agent_to_nearest_unfinished.reshape(n_agents, 1)
+            agent_tokens = np.concatenate([agent_pos_vel, agent_dist], axis=1).astype(np.float32, copy=False)
+        else:
+            agent_tokens = np.zeros((0, 5), dtype=np.float32)
+        agent_tokens_flat = agent_tokens.ravel().astype(np.float32, copy=False)
+
+        # target_tokens: [T, 5] = [x, y, found_flag, visible_flag, dist_to_nearest_agent]
+        if (
+            n_targets > 0
+            and target_pos_vec.size == n_targets * 2
+            and target_found_vec.size == n_targets
+            and target_visible_any.size == n_targets
+            and nearest_agent_dist.size == n_targets
+        ):
+            target_pos = target_pos_vec.reshape(n_targets, 2)
+            target_found = target_found_vec.reshape(n_targets, 1)
+            target_visible = target_visible_any.reshape(n_targets, 1)
+            target_dist = nearest_agent_dist.reshape(n_targets, 1)
+            target_tokens = np.concatenate(
+                [target_pos, target_found, target_visible, target_dist], axis=1
+            ).astype(np.float32, copy=False)
+        else:
+            target_tokens = np.zeros((0, 5), dtype=np.float32)
+        target_tokens_flat = target_tokens.ravel().astype(np.float32, copy=False)
+
+        # global auxiliary vector
+        global_aux_flat = visited_low.astype(np.float32, copy=False).ravel()
+
+        state_parts = [agent_tokens_flat, target_tokens_flat, global_aux_flat]
+        state_debug_parts = [
+            ("agent_tokens_flat", tuple(agent_tokens_flat.shape)),
+            ("target_tokens_flat", tuple(target_tokens_flat.shape)),
+            ("global_aux_flat", tuple(global_aux_flat.shape)),
+        ]
 
         global_state = np.concatenate(state_parts, axis=0).astype(np.float32, copy=False)
 

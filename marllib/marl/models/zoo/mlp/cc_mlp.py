@@ -30,6 +30,7 @@ from ray.rllib.utils.framework import try_import_torch
 from ray.rllib.utils.typing import TensorType
 from marllib.marl.models.zoo.mlp.base_mlp import BaseMLP
 from marllib.marl.models.zoo.encoder.cc_encoder import CentralizedEncoder
+from marllib.marl.models.zoo.encoder.MyCentralizedRelationalEncoder import MyCentralizedRelationalEncoder
 from torch.optim import Adam
 
 torch, nn = try_import_torch()
@@ -51,7 +52,7 @@ class CentralizedCriticMLP(BaseMLP):
                          name, **kwargs)
 
         # encoder for centralized VF
-        self.cc_vf_encoder = CentralizedEncoder(model_config, self.full_obs_space)
+        self.cc_vf_encoder = MyCentralizedRelationalEncoder(model_config, self.full_obs_space)
 
         # Central VF
         if self.custom_config["opp_action_in_cc"]:
@@ -62,20 +63,38 @@ class CentralizedCriticMLP(BaseMLP):
         else:
             input_size = self.cc_vf_encoder.output_dim
 
-        self.cc_vf_branch = SlimFC(
-            in_size=input_size,
-            out_size=1,
-            initializer=normc_initializer(0.01),
-            activation_fn=None)
+        self.cc_vf_branch = nn.Sequential(
+            SlimFC(
+                in_size=input_size,
+                out_size=input_size // 2,
+                initializer=normc_initializer(1.0),
+                activation_fn=self.activation,
+            ),
+            SlimFC(
+                in_size=input_size // 2,
+                out_size=1,
+                initializer=normc_initializer(0.01),
+                activation_fn=None,
+            ),
+        )
 
         self.q_flag = False
         if self.custom_config["algorithm"] in ["coma"]:
             self.q_flag = True
-            self.cc_vf_branch = SlimFC(
-                in_size=input_size,
-                out_size=num_outputs,
-                initializer=normc_initializer(0.01),
-                activation_fn=None)
+            self.cc_vf_branch = nn.Sequential(
+                SlimFC(
+                    in_size=input_size,
+                    out_size=input_size // 2,
+                    initializer=normc_initializer(1.0),
+                    activation_fn=self.activation,
+                ),
+                SlimFC(
+                    in_size=input_size // 2,
+                    out_size=num_outputs,
+                    initializer=normc_initializer(0.01),
+                    activation_fn=None,
+                ),
+            )
 
         if self.custom_config["algorithm"] in ["hatrpo", "happo"]:
             self.other_policies = {}
@@ -105,9 +124,6 @@ class CentralizedCriticMLP(BaseMLP):
         x = self.cc_vf_encoder(state)
         if not hasattr(self, "_debug_printed"):
             print("[Critic DEBUG] encoded obs shape:", x.shape)
-
-        if not hasattr(self, "_debug_printed") and opponent_actions is not None:
-            print("[Critic DEBUG] opponent_actions shape:", opponent_actions.shape)
 
         if opponent_actions is None:
             x = torch.cat([x.reshape(B, -1)], 1)

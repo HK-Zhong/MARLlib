@@ -29,6 +29,8 @@ from ray.rllib.utils.annotations import override
 from ray.rllib.utils.framework import try_import_torch
 from ray.rllib.utils.typing import Dict, TensorType, List
 from marllib.marl.models.zoo.encoder.base_encoder import BaseEncoder
+from marllib.marl.models.zoo.encoder.MyDualEncoder import MyDualEncoder
+
 
 torch, nn = try_import_torch()
 
@@ -57,14 +59,23 @@ class BaseMLP(TorchModelV2, nn.Module):
         self.activation = model_config.get("fcnet_activation")
 
         # encoder
-        self.p_encoder = BaseEncoder(model_config, self.full_obs_space)
+        self.p_encoder = MyDualEncoder(model_config, self.full_obs_space)
         self.vf_encoder = BaseEncoder(model_config, self.full_obs_space)
 
-        self.p_branch = SlimFC(
-            in_size=self.p_encoder.output_dim,
-            out_size=num_outputs,
-            initializer=normc_initializer(0.01),
-            activation_fn=None)
+        self.p_branch = nn.Sequential(
+            SlimFC(
+                in_size=self.p_encoder.output_dim,
+                out_size=self.p_encoder.output_dim // 2,
+                initializer=normc_initializer(1.0),
+                activation_fn=self.activation,
+            ),
+            SlimFC(
+                in_size=self.p_encoder.output_dim // 2,
+                out_size=num_outputs,
+                initializer=normc_initializer(0.01),
+                activation_fn=None,
+            ),
+        )
 
         # self.vf_encoder = nn.Sequential(*copy.deepcopy(layers))
         self.vf_branch = SlimFC(
@@ -89,6 +100,7 @@ class BaseMLP(TorchModelV2, nn.Module):
                 state: List[TensorType],
                 seq_lens: TensorType) -> (TensorType, List[TensorType]):
 
+        # False
         if self.custom_config["global_state_flag"] or self.custom_config["mask_flag"]:
             flat_inputs = input_dict["obs"]["obs"].float()
             actor_obs = flat_inputs[:, :self.local_obs_dim]
@@ -101,13 +113,9 @@ class BaseMLP(TorchModelV2, nn.Module):
         else:
             flat_inputs = input_dict["obs"]["obs"].float()
             actor_obs = flat_inputs[:, :self.local_obs_dim]
-            if not hasattr(self, "_debug_actor_printed"):
-                print("\n[ACTOR DEBUG] actor input shape:", actor_obs.shape)
 
         self.inputs = actor_obs
         self._features = self.p_encoder(self.inputs)
-        if not hasattr(self, "_debug_actor_printed"):
-            print("[ACTOR DEBUG] encoded actor shape:", self._features.shape)
 
         output = self.p_branch(self._features)
         if not hasattr(self, "_debug_actor_printed"):
