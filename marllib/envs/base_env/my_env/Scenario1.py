@@ -250,32 +250,44 @@ class Scenario(BaseScenario):
 
     def reward(self, agent, world):
         """
-        Sample reward (minimal, intended to be easy to iterate on):
+        Three-stage local reward design.
 
-        + information gain: newly discovered free cells in agent.perceived_grid_map
-          (incremental count from world.los_based_map_update)
-        + small shaping: more visible UWB anchors is slightly better
-        - collisions
-        - optional safety penalty (via world.is_safe)
-        - small step penalty (encourage efficiency)
+        Stage A: Coarse search (outside target region, target not visible)
+            - use region_progress to guide the agent toward the nearest unfinished region
+            - use reward_repeat to suppress useless wandering when the agent neither
+              discovers new cells nor makes region progress
+
+        Stage B: Fine search (inside target region, target still not visible)
+            - disable region_progress shaping
+            - use reward_fine_search to encourage discovering new cells inside the region
+
+        Stage C: Target pursuit (target becomes visible)
+            - disable region_progress shaping
+            - give a one-time discovery bonus when target first becomes visible
+            - use reward_visible_target to encourage moving closer to the visible target
+
+        Shared penalties / shaping across stages:
+            - exploration/info gain reward
+            - collision penalty
+            - safety penalty
+            - per-step penalty
         """
-        # -------------------------
-        # number of visible anchors
-        # -------------------------
+
+        # =============================================================
+        # 0) Shared low-level signals used across all reward stages
+        # =============================================================
+
+        # Number of currently visible anchors (currently disabled in reward via W_VISIBLE=0)
         visible_ids = getattr(agent, "last_visible_uwb_ids", [])
         num_visible = len(visible_ids)
         total_anchors = max(len(getattr(world, "uwb_locations", {})), 1)
 
-        # -------------------------
-        # information gain (incremental, no full-map copy)
-        # -------------------------
+        # Incremental exploration signal: how many new free cells were discovered this step.
         new_free = int(getattr(agent, "last_new_free_count", 0))
         denom = float(max(world.grid_size * world.grid_size, 1))
         info_gain = (float(new_free) / denom) if denom > 0 else 0.0
 
-        # -------------------------
-        # Collision penalty
-        # -------------------------
+        # Pairwise collision count for local collision penalty.
         collisions = 0
         if getattr(agent, "collide", False):
             for other_agent in world.agents:
@@ -284,25 +296,32 @@ class Scenario(BaseScenario):
                 if self.is_collision(other_agent, agent):
                     collisions += 1
 
-        # -------------------------
-        # Optional safety penalty (EDT-based)
-        # -------------------------
+        # Binary safety violation flag (e.g. too close to obstacles / unsafe area).
         unsafe = 0
         if hasattr(world, "is_safe"):
             x_real, y_real = agent.state.p_pos
             if not world.is_safe(float(x_real), float(y_real)):
                 unsafe = 1
 
-        # -------------------------
-        # Region progress shaping (dense guidance, but weak)
-        # Use progress toward nearest unfinished region center instead of
-        # absolute proximity reward, which is easier to exploit by hovering.
-        # -------------------------
+        # =============================================================
+        # 1) Stage classifier: determine whether the agent is still in
+        #    coarse search, has entered the target region, or already sees
+        #    a concrete target.
+        # =============================================================
+
+        in_target_region = False
+
+        # Dense region-progress shaping used ONLY during coarse search.
+        # It measures whether the agent moves closer to the nearest unfinished
+        # region center. Once inside the region (or once a target is visible),
+        # this shaping will be disabled later.
         region_progress = 0.0
         cur_min_dist = np.nan
+
         if hasattr(world, "_region_centers") and hasattr(world, "target_found"):
             ax, ay = agent.state.p_pos
             found_mask = np.array(world.target_found, dtype=bool)
+
             if world._region_centers.shape[0] == found_mask.shape[0]:
                 centers = world._region_centers[~found_mask]
             else:
@@ -313,6 +332,12 @@ class Scenario(BaseScenario):
                 dy = centers[:, 1] - float(ay)
                 dist_sq = dx * dx + dy * dy
                 cur_min_dist = float(np.sqrt(dist_sq.min()))
+
+                # Region entry is determined by distance to the nearest unfinished
+                # region center. This provides the switch from coarse search to
+                # fine search.
+                REGION_SEARCH_RADIUS_M = 5.0
+                in_target_region = (cur_min_dist <= REGION_SEARCH_RADIUS_M)
 
                 try:
                     agent_idx = int(agent.name.split("_")[-1])
@@ -331,20 +356,22 @@ class Scenario(BaseScenario):
                 if self._prev_region_min_dist is not None and 0 <= agent_idx < len(self._prev_region_min_dist):
                     self._prev_region_min_dist[agent_idx] = cur_min_dist
 
-        # -------------------------
-        # Visible target flags / one-time discovery bonus
-        # -------------------------
+        # =============================================================
+        # 2) Visible-target analysis: determine whether Stage C has started.
+        #    Also compute the one-time discovery bonus and dense visible-target
+        #    progress shaping with locked-target anti-jitter logic.
+        # =============================================================
+
         has_visible_target = False
         reward_target_discovery = 0.0
 
         if not hasattr(agent, "prev_visible_target_count"):
             agent.prev_visible_target_count = 0
 
-        # -------------------------
-        # Visible target progress reward (locked target + anti-jitter)
-        # Lock by target grid coordinate instead of transient visible-list index.
-        # Reset tracking when the locked target disappears or is completed.
-        # -------------------------
+        # Locked visible-target progress reward:
+        # - lock by stable grid coordinate instead of transient visible-list index
+        # - if the locked target disappears, reset tracking
+        # - once visible, reward moving closer to that target
         reward_visible_target = 0.0
 
         if not hasattr(agent, "current_target_grid"):
@@ -355,7 +382,10 @@ class Scenario(BaseScenario):
             cur_visible_count = int(len(visible_targets))
             has_visible_target = cur_visible_count > 0
 
-            newly_visible = max(cur_visible_count - int(getattr(agent, "prev_visible_target_count", 0)), 0)
+            newly_visible = max(
+                cur_visible_count - int(getattr(agent, "prev_visible_target_count", 0)),
+                0,
+            )
             if newly_visible > 0:
                 reward_target_discovery += float(newly_visible)
 
@@ -411,9 +441,10 @@ class Scenario(BaseScenario):
 
             agent.prev_visible_target_count = cur_visible_count if has_visible_target else 0
 
-        # -------------------------
-        # Optimized weights (task-driven, target-centric)
-        # -------------------------
+        # =============================================================
+        # 3) Reward weights
+        # =============================================================
+
         W_INFO = 0.1
         W_VISIBLE = 0.0
         W_COLLIDE = 1.0
@@ -421,32 +452,60 @@ class Scenario(BaseScenario):
         W_STEP = 0.02
         W_REGION = 0.5
         W_TARGET_DISCOVERY = 1.0
+        W_FINE_SEARCH = 3.0
         W_REPEAT_MARGIN = 0.05
 
-        # -------------------------
-        # Reward components (for episode-level diagnostics)
+        # =============================================================
+        # 4) Stage-dependent reward construction
+        #
+        # Stage A: coarse search
+        #   not in_target_region and not has_visible_target
+        #   -> region guidance is active
+        #
+        # Stage B: fine search
+        #   in_target_region and not has_visible_target
+        #   -> region guidance is disabled
+        #   -> reward_fine_search encourages discovering new cells inside region
+        #
+        # Stage C: target pursuit
+        #   has_visible_target
+        #   -> region guidance is disabled
+        #   -> reward_target = discovery bonus + visible-target progress reward
+        #
         # NOTE:
-        # - Target discovery / completion reward is handled ONLY in global_reward().
-        # - Local reward only provides weak shaping and penalties.
-        # -------------------------
-        if has_visible_target:
+        # - True team success reward is handled only in global_reward().
+        # - This local reward provides stage-specific shaping and penalties.
+        # =============================================================
+
+        # Disable region-center shaping once the agent has entered the region
+        # (Stage B) or once a concrete target is visible (Stage C).
+        if has_visible_target or in_target_region:
             region_progress = 0.0
 
+        # Shared reward terms (can appear in multiple stages).
         reward_explore = W_INFO * info_gain + W_VISIBLE * (num_visible / float(total_anchors)) - W_STEP
         reward_region = W_REGION * float(region_progress)
         reward_collision = -W_COLLIDE * float(collisions)
         reward_safety = -W_UNSAFE * float(unsafe)
         reward_target = reward_visible_target + W_TARGET_DISCOVERY * reward_target_discovery
 
-        # Lightweight repeated-exploration penalty:
-        # If the agent is not seeing a target, discovers no new free cells,
-        # and is not making region progress, punish this more strongly than
-        # the region-progress penalty alone. This encourages the agent to leave
-        # stale trajectories and search new cells, even if that means moving
-        # away from the current region center.
+        # Stage B only: encourage local scanning inside the region until a true
+        # target becomes visible.
+        reward_fine_search = 0.0
+        if in_target_region and (not has_visible_target):
+            reward_fine_search = W_FINE_SEARCH * info_gain
+
+        # Stage A only: repeated-exploration penalty.
+        # Outside the target region, if the agent neither discovers new cells
+        # nor makes positive region progress, add an extra penalty to suppress
+        # useless wandering during coarse search.
         reward_repeat = 0.0
-        if (not has_visible_target) and (new_free == 0) and (region_progress <= 0.0):
+        if (not has_visible_target) and (not in_target_region) and (new_free == 0) and (region_progress <= 0.0):
             reward_repeat = -(abs(reward_region) + W_REPEAT_MARGIN)
+
+        # =============================================================
+        # 5) Final local reward sum
+        # =============================================================
 
         rew = 0.0
         rew += reward_explore
@@ -454,14 +513,15 @@ class Scenario(BaseScenario):
         rew += reward_collision
         rew += reward_safety
         rew += reward_target
+        rew += reward_fine_search
         rew += reward_repeat
 
-        # Episode-level diagnostic accumulators (sum over all agent reward calls)
+        # Episode-level diagnostic accumulators (sum over all per-agent reward calls)
         self._reward_explore_total += float(reward_explore)
         self._reward_region_total += float(reward_region)
         self._reward_collision_total += float(reward_collision)
         self._reward_safety_total += float(reward_safety)
-        self._reward_target_total += float(reward_target)
+        self._reward_target_total += float(reward_target + reward_fine_search)
         self._reward_repeat_total += float(reward_repeat)
 
         return float(rew)
@@ -572,9 +632,9 @@ class Scenario(BaseScenario):
         if len(getattr(world, "agents", [])) > 0 and tpr is not None and len(tpr) > 0:
             agent_xy = np.array([a.state.p_pos for a in world.agents], dtype=np.float32).reshape(-1, 2)
             target_xy = np.asarray(tpr, dtype=np.float32).reshape(-1, 2)
-            diff = target_xy[:, None, :] - agent_xy[None, :, :]              # [T, A, 2]
-            dists = np.linalg.norm(diff, axis=-1)                            # [T, A]
-            nearest_agent_dist = dists.min(axis=1).astype(np.float32)        # [T]
+            diff = target_xy[:, None, :] - agent_xy[None, :, :]  # [T, A, 2]
+            dists = np.linalg.norm(diff, axis=-1)  # [T, A]
+            nearest_agent_dist = dists.min(axis=1).astype(np.float32)  # [T]
             nearest_agent_dist = nearest_agent_dist / max(float(world.map_size_m), 1e-6)
         else:
             nearest_agent_dist = np.zeros((0,), dtype=np.float32)
@@ -640,8 +700,8 @@ class Scenario(BaseScenario):
 
             if unfinished_xy.shape[0] > 0:
                 agent_xy = np.array([a.state.p_pos for a in world.agents], dtype=np.float32).reshape(-1, 2)
-                diff = agent_xy[:, None, :] - unfinished_xy[None, :, :]       # [A, T_unfinished, 2]
-                dists = np.linalg.norm(diff, axis=-1)                          # [A, T_unfinished]
+                diff = agent_xy[:, None, :] - unfinished_xy[None, :, :]  # [A, T_unfinished, 2]
+                dists = np.linalg.norm(diff, axis=-1)  # [A, T_unfinished]
                 agent_to_nearest_unfinished = dists.min(axis=1).astype(np.float32)
                 agent_to_nearest_unfinished = agent_to_nearest_unfinished / max(float(world.map_size_m), 1e-6)
             else:

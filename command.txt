@@ -2,8 +2,9 @@ nohup python src/train.py > nohup_results/train_$(date +"%Y%m%d_%H%M%S").log 2>&
 
 tensorboard --logdir .
 
-872927
+949533
 
+episode_reward
 completion_ratio
 team_new_targets_found
 reward_target_total
