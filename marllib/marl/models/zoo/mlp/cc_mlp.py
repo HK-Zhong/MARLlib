@@ -170,7 +170,6 @@ class CentralizedCriticMLP(BaseMLP):
         if len(full_obs.shape) != 2:
             full_obs = full_obs.reshape(full_obs.shape[0], -1)
 
-        B = full_obs.shape[0]
         obs_dim = full_obs.shape[1]
         expected_local_obs_dim = self.cc_vf_encoder.local_obs_dim
         expected_global_state_dim = self.cc_vf_encoder.global_state_dim

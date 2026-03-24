@@ -58,6 +58,7 @@ class BaseMLP(TorchModelV2, nn.Module):
         self.activation = model_config.get("fcnet_activation")
 
         # encoder
+        # print("self.full_obs_space: ", self.full_obs_space)  一个 agent 的完全观测（包含 global state）
         self.p_encoder = MyDualEncoder(model_config, self.full_obs_space)
         self.vf_encoder = BaseEncoder(model_config, self.full_obs_space)
 
@@ -137,7 +138,6 @@ class BaseMLP(TorchModelV2, nn.Module):
         B = self._features.shape[0]
         # use full observation for critic
         x = self.vf_encoder(self._last_obs)
-        print("========== This is value_function in base mlp ==========")
 
         if self.q_flag:
             return torch.reshape(self.vf_branch(x), [B, -1])
