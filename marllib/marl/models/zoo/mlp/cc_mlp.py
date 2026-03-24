@@ -121,12 +121,12 @@ class CentralizedCriticMLP(BaseMLP):
         if not hasattr(self, "_debug_printed"):
             print("\n[Critic DEBUG] original state shape:", state.shape)
 
-        x = self.cc_vf_encoder(state)
+        cc_vf_encoder_output = self.cc_vf_encoder(state)
         if not hasattr(self, "_debug_printed"):
-            print("[Critic DEBUG] encoded obs shape:", x.shape)
+            print("[Critic DEBUG] encoded obs shape:", cc_vf_encoder_output.shape)
 
         if opponent_actions is None:
-            x = torch.cat([x.reshape(B, -1)], 1)
+            cc_vf_encoder_output = torch.cat([cc_vf_encoder_output.reshape(B, -1)], 1)
         else:
             if isinstance(self.custom_config["space_act"], Box):  # continuous
                 opponent_actions_ls = [opponent_actions[:, i, :]
@@ -151,20 +151,49 @@ class CentralizedCriticMLP(BaseMLP):
 
             # x = torch.cat([x.reshape(B, -1)] + opponent_actions_ls, 1)
             if not hasattr(self, "_debug_printed"):
-                print("[Critic DEBUG] critic input x shape:", x.shape)
+                print("[Critic DEBUG] critic input x shape:", cc_vf_encoder_output.shape)
 
         if self.q_flag:
-            return torch.reshape(self.cc_vf_branch(x), [-1, self.num_outputs])
+            return torch.reshape(self.cc_vf_branch(cc_vf_encoder_output), [-1, self.num_outputs])
         else:
             if not hasattr(self, "_debug_printed"):
-                print("[Critic DEBUG] value output shape:", self.cc_vf_branch(x).shape)
+                print("[Critic DEBUG] value output shape:", self.cc_vf_branch(cc_vf_encoder_output).shape)
                 self._debug_printed = True
-            return torch.reshape(self.cc_vf_branch(x), [-1])
+            return torch.reshape(self.cc_vf_branch(cc_vf_encoder_output), [-1])
+
+    @override(BaseMLP)
+    def value_function(self) -> TensorType:
+        assert self._features is not None, "must call forward() first"
+        assert hasattr(self, "_last_obs"), "full observation is not cached; must call forward() first"
+
+        full_obs = self._last_obs
+        if len(full_obs.shape) != 2:
+            full_obs = full_obs.reshape(full_obs.shape[0], -1)
+
+        B = full_obs.shape[0]
+        obs_dim = full_obs.shape[1]
+        expected_local_obs_dim = self.cc_vf_encoder.local_obs_dim
+        expected_global_state_dim = self.cc_vf_encoder.global_state_dim
+        expected_obs_dim = expected_local_obs_dim + expected_global_state_dim
+
+        assert obs_dim == expected_obs_dim, (
+            f"value_function got obs_dim={obs_dim}, but expected {expected_obs_dim} "
+            f"(local_obs_dim={expected_local_obs_dim}, global_state_dim={expected_global_state_dim})"
+        )
+
+        state = full_obs.unsqueeze(1).repeat(1, self.n_agents, 1)
+
+        if not hasattr(self, "_vf_debug_printed"):
+            print("\n[Critic value_function DEBUG] full_obs:", full_obs.shape)
+            print("[Critic value_function DEBUG] repeated state:", state.shape)
+            self._vf_debug_printed = True
+
+        return self.central_value_function(state)
 
     @override(BaseMLP)
     def critic_parameters(self):
-        critics = [self.cc_vf_encoder, self.cc_vf_branch, ]
-        return reduce(lambda x, y: x + y, map(lambda p: list(p.parameters()), critics))
+        self.critics = [self.cc_vf_encoder, self.cc_vf_branch, ]
+        return reduce(lambda x, y: x + y, map(lambda p: list(p.parameters()), self.critics))
 
     def link_other_agent_policy(self, agent_id, policy):
         if agent_id in self.other_policies:

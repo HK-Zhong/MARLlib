@@ -16,6 +16,10 @@ class MyDualEncoder(nn.Module):
     branch design:
         - coarse branch: pos + vel + region_low (404)
         - fine branch: local_patch (225)
+
+    fusion design:
+        - gated fusion between coarse and fine features
+        - gate is learned from both branch features
     """
 
     def __init__(self, model_config, obs_space):
@@ -27,7 +31,8 @@ class MyDualEncoder(nn.Module):
 
         # -------- dims --------
         self.actor_obs_dim = 629
-        self.global_state_dim = 165  # 和你当前环境一致
+        # global_state_dim 不再在 encoder 中使用（由环境动态决定）
+        self.global_state_dim = None
         self.coarse_dim = 404
         self.fine_dim = 225
 
@@ -95,11 +100,26 @@ class MyDualEncoder(nn.Module):
         )
 
         # =========================================================
-        # 3. Fusion
+        # 3. Gated Fusion
         # =========================================================
-        self.encoder = nn.Sequential(
+        self.gate_layer = nn.Sequential(
             SlimFC(
                 in_size=branch_hidden_dim * 2,
+                out_size=branch_hidden_dim,
+                initializer=normc_initializer(1.0),
+                activation_fn=self.activation,
+            ),
+            SlimFC(
+                in_size=branch_hidden_dim,
+                out_size=branch_hidden_dim,
+                initializer=normc_initializer(1.0),
+                activation_fn=None,
+            ),
+        )
+
+        self.encoder = nn.Sequential(
+            SlimFC(
+                in_size=branch_hidden_dim,
                 out_size=final_out_dim,
                 initializer=normc_initializer(1.0),
                 activation_fn=self.activation,
@@ -136,8 +156,11 @@ class MyDualEncoder(nn.Module):
         fine_conv_feat = fine_conv_feat.reshape(fine_conv_feat.shape[0], -1)
         fine_feat = self.fine_fc(fine_conv_feat)
 
-        # -------- 融合 --------
-        fused = torch.cat([coarse_feat, fine_feat], dim=1)
+        # -------- Gated 融合 --------
+        gate_input = torch.cat([coarse_feat, fine_feat], dim=1)
+        gate = self.gate_layer(gate_input)
+        gate = torch.sigmoid(gate)
+        fused = gate * coarse_feat + (1.0 - gate) * fine_feat
         output = self.encoder(fused)
 
         # -------- debug（只打印一次）--------
@@ -150,6 +173,8 @@ class MyDualEncoder(nn.Module):
             print("fine_conv_feat:", fine_conv_feat.shape)
             print("coarse_feat:", coarse_feat.shape)
             print("fine_feat:", fine_feat.shape)
+            print("gate_input:", gate_input.shape)
+            print("gate:", gate.shape)
             print("fused:", fused.shape)
             print("output:", output.shape)
             print("\n[DUAL ENCODER DEBUG END]")

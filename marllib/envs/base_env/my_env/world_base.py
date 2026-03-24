@@ -37,7 +37,7 @@ class UWBPlanningWorld(WorldMapMixin, WorldUWBMixIn, WorldTargetsMixIn):  # mult
         # simulation timestep
         self.dt = 0.2
         self.perception_range = 5.0
-        self.target_reach_dist_m = 3.0
+        self.target_reach_dist_m = 4.0
 
         # =====================================================
         # Grid map / obstacle representation (WorldMapMixin)

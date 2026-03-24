@@ -31,7 +31,6 @@ from ray.rllib.utils.typing import Dict, TensorType, List
 from marllib.marl.models.zoo.encoder.base_encoder import BaseEncoder
 from marllib.marl.models.zoo.encoder.MyDualEncoder import MyDualEncoder
 
-
 torch, nn = try_import_torch()
 
 
@@ -101,6 +100,7 @@ class BaseMLP(TorchModelV2, nn.Module):
                 seq_lens: TensorType) -> (TensorType, List[TensorType]):
 
         # False
+        # flat_inputs: 单个 agent 的完整观测
         if self.custom_config["global_state_flag"] or self.custom_config["mask_flag"]:
             flat_inputs = input_dict["obs"]["obs"].float()
             actor_obs = flat_inputs[:, :self.local_obs_dim]
@@ -113,9 +113,13 @@ class BaseMLP(TorchModelV2, nn.Module):
         else:
             flat_inputs = input_dict["obs"]["obs"].float()
             actor_obs = flat_inputs[:, :self.local_obs_dim]
+            if not hasattr(self, "_debug_actor_printed"):
+                print("\n[ACTOR DEBUG] actor input shape:", actor_obs.shape)
 
-        self.inputs = actor_obs
-        self._features = self.p_encoder(self.inputs)
+        # store actor obs and full obs separately
+        self.actor_inputs = actor_obs
+        self._last_obs = flat_inputs
+        self._features = self.p_encoder(self.actor_inputs)
 
         output = self.p_branch(self._features)
         if not hasattr(self, "_debug_actor_printed"):
@@ -131,7 +135,9 @@ class BaseMLP(TorchModelV2, nn.Module):
     def value_function(self) -> TensorType:
         assert self._features is not None, "must call forward() first"
         B = self._features.shape[0]
-        x = self.vf_encoder(self.inputs)
+        # use full observation for critic
+        x = self.vf_encoder(self._last_obs)
+        print("========== This is value_function in base mlp ==========")
 
         if self.q_flag:
             return torch.reshape(self.vf_branch(x), [B, -1])

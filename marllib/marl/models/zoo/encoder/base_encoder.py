@@ -40,8 +40,6 @@ class BaseEncoder(nn.Module):
         # decide the model arch
         self.custom_config = model_config["custom_model_config"]
         self.activation = model_config.get("fcnet_activation")
-        self.local_obs_dim = 629
-        self.global_state_dim = 165
 
         # encoder
         layers = []
@@ -57,7 +55,7 @@ class BaseEncoder(nn.Module):
                     encoder_layer_dim.append(out_dim)
 
             self.encoder_layer_dim = encoder_layer_dim
-            input_dim = obs_space['obs'].shape[0] - self.global_state_dim
+            input_dim = obs_space['obs'].shape[0]
             for out_dim in self.encoder_layer_dim:
                 layers.append(
                     SlimFC(in_size=input_dim,

@@ -579,7 +579,7 @@ class Scenario(BaseScenario):
              [target_x, target_y, found_flag, visible_flag, dist_to_nearest_agent]
 
         3) global_aux_flat
-           [visited_low]
+           [visited_low, grid_map_low]
 
         Returned shape:
             [global_state_dim, ]
@@ -635,7 +635,7 @@ class Scenario(BaseScenario):
 
         # -------------------------------------------------
         # 5) Low-resolution global visited map (team coverage summary)
-        #    Use union of all agents' visited_grid_map, then average-pool to 10x10.
+        #    Use union of all agents' visited_grid_map, then average-pool to 15x15.
         # -------------------------------------------------
         visited_union = None
         for a in getattr(world, "agents", []):
@@ -648,16 +648,32 @@ class Scenario(BaseScenario):
             else:
                 visited_union = np.maximum(visited_union, v_bin)
 
+        low_h, low_w = 15, 15
         if visited_union is None:
-            visited_low = np.zeros((100,), dtype=np.float32)
+            visited_low = np.zeros((low_h * low_w,), dtype=np.float32)
         else:
             gh, gw = visited_union.shape
-            out_h, out_w = 10, 10
-            block_h = max(gh // out_h, 1)
-            block_w = max(gw // out_w, 1)
-            trimmed = visited_union[:block_h * out_h, :block_w * out_w]
-            pooled = trimmed.reshape(out_h, block_h, out_w, block_w).mean(axis=(1, 3))
+            block_h = max(gh // low_h, 1)
+            block_w = max(gw // low_w, 1)
+            trimmed = visited_union[:block_h * low_h, :block_w * low_w]
+            pooled = trimmed.reshape(low_h, block_h, low_w, block_w).mean(axis=(1, 3))
             visited_low = pooled.astype(np.float32, copy=False).ravel()
+
+        # -------------------------------------------------
+        # 5.5) Low-resolution ground-truth obstacle map for critic use
+        #      Downsample world.grid_map to the same 15x15 resolution.
+        # -------------------------------------------------
+        grid_map = getattr(world, "grid_map", None)
+        if grid_map is None:
+            grid_map_low = np.zeros((low_h * low_w,), dtype=np.float32)
+        else:
+            grid_bin = (np.asarray(grid_map) > 0).astype(np.float32)
+            gh, gw = grid_bin.shape
+            block_h = max(gh // low_h, 1)
+            block_w = max(gw // low_w, 1)
+            trimmed = grid_bin[:block_h * low_h, :block_w * low_w]
+            pooled = trimmed.reshape(low_h, block_h, low_w, block_w).mean(axis=(1, 3))
+            grid_map_low = pooled.astype(np.float32, copy=False).ravel()
 
         # -------------------------------------------------
         # 6) Each target's current visibility flag (visible to any agent)
@@ -698,7 +714,7 @@ class Scenario(BaseScenario):
         # Structured packing for relational critic:
         #   1) agent_tokens_flat
         #   2) target_tokens_flat
-        #   3) global_aux_flat
+        #   3) global_aux_flat 450
         # -------------------------------------------------
         n_agents = len(getattr(world, "agents", []))
         n_targets = len(tpr) if (tpr is not None) else 0
@@ -732,7 +748,13 @@ class Scenario(BaseScenario):
         target_tokens_flat = target_tokens.ravel().astype(np.float32, copy=False)
 
         # global auxiliary vector
-        global_aux_flat = visited_low.astype(np.float32, copy=False).ravel()
+        global_aux_flat = np.concatenate(
+            [
+                visited_low.astype(np.float32, copy=False).ravel(),
+                grid_map_low.astype(np.float32, copy=False).ravel(),
+            ],
+            axis=0,
+        ).astype(np.float32, copy=False)
 
         state_parts = [agent_tokens_flat, target_tokens_flat, global_aux_flat]
         state_debug_parts = [

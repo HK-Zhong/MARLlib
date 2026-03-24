@@ -14,7 +14,7 @@ class MyCentralizedRelationalEncoder(nn.Module):
 
     Current fixed layout:
         local_obs_dim = 629
-        global_state_dim = 165
+        global_state_dim = A*5 + 10*5 + 450
 
     Shared global_state layout (taken from first agent slice only):
         1) agent_tokens_flat: [A * 5]
@@ -25,8 +25,8 @@ class MyCentralizedRelationalEncoder(nn.Module):
            each target token:
              [target_x, target_y, found_flag, visible_flag, dist_to_nearest_agent]
 
-        3) global_aux_flat: [100]
-           visited_low
+        3) global_aux_flat: [450]
+           [visited_low(15x15), grid_map_low(15x15)] as a 2x15x15 map tensor
     """
 
     def __init__(self, model_config, obs_space):
@@ -40,18 +40,19 @@ class MyCentralizedRelationalEncoder(nn.Module):
         # fixed dims (based on current env design)
         # -----------------------------
         self.local_obs_dim = 629
-        self.global_state_dim = 165
 
         self.agent_token_dim = 5
         self.target_token_dim = 5
         self.num_targets = 10
-        self.global_aux_dim = 100
+        self.global_aux_dim = 450  # visited_low(15x15) + grid_map_low(15x15)
 
-        # global_state = agent_tokens_flat(3*5) + target_tokens_flat(10*5) + global_aux(100)
         self.agent_tokens_flat_dim = self.num_agents * self.agent_token_dim
         self.target_tokens_flat_dim = self.num_targets * self.target_token_dim
-
-        assert self.agent_tokens_flat_dim + self.target_tokens_flat_dim + self.global_aux_dim == self.global_state_dim
+        self.global_state_dim = (
+                self.agent_tokens_flat_dim
+                + self.target_tokens_flat_dim
+                + self.global_aux_dim
+        )
 
         # -----------------------------
         # encoder dims
@@ -73,6 +74,9 @@ class MyCentralizedRelationalEncoder(nn.Module):
         self.token_hidden_dim = 64
         self.relation_hidden_dim = 64
         self.global_aux_hidden_dim = 64
+        self.global_aux_channels = 2
+        self.global_aux_map_h = 15
+        self.global_aux_map_w = 15
 
         # =========================================================
         # 1) Local team observation branch
@@ -129,11 +133,21 @@ class MyCentralizedRelationalEncoder(nn.Module):
 
         # =========================================================
         # 5) Global auxiliary encoder
-        #    input: visited_low (100)
+        #    input: [visited_low(15x15), grid_map_low(15x15)] => [B, 2, 15, 15]
         # =========================================================
-        self.global_aux_encoder = nn.Sequential(
+        self.global_aux_conv = nn.Sequential(
+            nn.Conv2d(2, 8, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(8, 16, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2),  # 15 -> 7
+            nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+        )
+
+        self.global_aux_fc = nn.Sequential(
             SlimFC(
-                in_size=self.global_aux_dim,
+                in_size=32 * 7 * 7,
                 out_size=self.global_aux_hidden_dim,
                 initializer=normc_initializer(1.0),
                 activation_fn=self.activation,
@@ -160,14 +174,15 @@ class MyCentralizedRelationalEncoder(nn.Module):
         """
         inputs:
             [B, num_agents, local_obs_dim + global_state_dim]
-            = [B, A, 629 + 165]
+            = [B, A, 629 + (A*5 + 10*5 + 450)]
         """
 
         # ---------------------------------------------------------
         # 0) Split local_obs and shared global_state
         # ---------------------------------------------------------
-        local_obs = inputs[:, :, :self.local_obs_dim]   # [B, A, 629]
-        global_state = inputs[:, 0, self.local_obs_dim:self.local_obs_dim + self.global_state_dim]  # [B, 165]
+        local_obs = inputs[:, :, :self.local_obs_dim]  # [B, A, 629]
+        global_state = inputs[
+            :, 0, self.local_obs_dim:self.local_obs_dim + self.global_state_dim]  # [B, global_state_dim]
 
         B = local_obs.shape[0]
 
@@ -180,11 +195,11 @@ class MyCentralizedRelationalEncoder(nn.Module):
         # ---------------------------------------------------------
         # 2) Unpack structured global_state
         # ---------------------------------------------------------
-        agent_tokens_flat = global_state[:, :self.agent_tokens_flat_dim]  # [B, 15]
+        agent_tokens_flat = global_state[:, :self.agent_tokens_flat_dim]  # [B, A*5]
         target_tokens_flat = global_state[
             :, self.agent_tokens_flat_dim:self.agent_tokens_flat_dim + self.target_tokens_flat_dim
-        ]  # [B, 50]
-        global_aux = global_state[:, self.agent_tokens_flat_dim + self.target_tokens_flat_dim:]  # [B, 100]
+        ]  # [B, 10*5]
+        global_aux = global_state[:, self.agent_tokens_flat_dim + self.target_tokens_flat_dim:]  # [B, 450]
 
         agent_tokens = agent_tokens_flat.reshape(B, self.num_agents, self.agent_token_dim)  # [B, A, 5]
         target_tokens = target_tokens_flat.reshape(B, self.num_targets, self.target_token_dim)  # [B, T, 5]
@@ -218,9 +233,14 @@ class MyCentralizedRelationalEncoder(nn.Module):
         relation_global = relation_feat.mean(dim=(1, 2))  # [B, relation_hidden_dim]
 
         # ---------------------------------------------------------
-        # 6) Encode global auxiliary vector
+        # 6) Encode global auxiliary map with CNN
         # ---------------------------------------------------------
-        global_aux_feat = self.global_aux_encoder(global_aux)  # [B, global_aux_hidden_dim]
+        global_aux_map = global_aux.reshape(
+            B, self.global_aux_channels, self.global_aux_map_h, self.global_aux_map_w
+        )  # [B, 2, 15, 15]
+        global_aux_conv_feat = self.global_aux_conv(global_aux_map)  # [B, 32, 7, 7]
+        global_aux_conv_feat = global_aux_conv_feat.reshape(B, -1)
+        global_aux_feat = self.global_aux_fc(global_aux_conv_feat)  # [B, global_aux_hidden_dim]
 
         # ---------------------------------------------------------
         # 7) Final fusion
@@ -239,6 +259,8 @@ class MyCentralizedRelationalEncoder(nn.Module):
             print("agent_tokens:", agent_tokens.shape)
             print("target_tokens:", target_tokens.shape)
             print("global_aux:", global_aux.shape)
+            print("global_aux_map:", global_aux_map.shape)
+            print("global_aux_conv_feat:", global_aux_conv_feat.shape)
             print("local_feat:", local_feat.shape)
             print("agent_embeds:", agent_embeds.shape)
             print("target_embeds:", target_embeds.shape)

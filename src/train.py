@@ -37,3 +37,13 @@ mappo.fit(
     callbacks=UWBCustomMetricsCallbacks
     # local_dir="/home/coolas-fly/MARLlib/nohup_results/ray_results",
 )
+
+# rendering
+# mappo.render(env, model,
+#              stop={'timesteps_total': 40000000},
+#              restore_path={'params_path': "checkpoint/params.json",  # experiment configuration
+#                            'model_path': "checkpoint/checkpoint-6250"},  # checkpoint path
+#              num_workers=10,
+#              local_mode=False,
+#              share_policy="all",
+#              checkpoint_end=True)
