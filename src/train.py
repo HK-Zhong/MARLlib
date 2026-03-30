@@ -19,7 +19,7 @@ model = marl.build_model(env, mappo,
 
 # 输出一下model的内容（测试用）
 
-timesteps_total = 1000000
+timesteps_total = 900000
 
 # start training
 mappo.fit(

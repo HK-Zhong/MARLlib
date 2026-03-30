@@ -16,6 +16,7 @@ class Scenario(BaseScenario):
         self._agent_target_counts = None
         self._prev_region_min_dist = None
         self._reward_target_total = 0.0
+        self._reward_fine_search_total = 0.0
         self._reward_region_total = 0.0
         self._reward_explore_total = 0.0
         self._reward_safety_total = 0.0
@@ -89,6 +90,7 @@ class Scenario(BaseScenario):
 
         # Reset reward accumulators for episode-level diagnostics
         self._reward_target_total = 0.0
+        self._reward_fine_search_total = 0.0
         self._reward_region_total = 0.0
         self._reward_explore_total = 0.0
         self._reward_safety_total = 0.0
@@ -103,8 +105,58 @@ class Scenario(BaseScenario):
             a.prev_min_target_dist = None
             a.current_target_grid = None
             a.prev_visible_target_count = 0
+            a.prev_frontier_strength = None
             if hasattr(a, "current_target_id"):
                 a.current_target_id = None
+
+    def _compute_local_frontier_strength(self, agent, world, patch_radius=7):
+        """Compute local frontier strength around the agent.
+
+        Frontier cells are defined as locally observed free cells that are
+        adjacent to at least one unknown cell within the local window.
+        """
+        pgm = getattr(agent, "perceived_grid_map", None)
+        if pgm is None:
+            return 0.0
+
+        ax, ay = agent.state.p_pos
+        gx, gy = world.to_grid(float(ax), float(ay))
+
+        R = int(patch_radius)
+        H, W = pgm.shape
+        x0, x1 = gx - R, gx + R + 1
+        y0, y1 = gy - R, gy + R + 1
+
+        sx0, sx1 = max(0, x0), min(H, x1)
+        sy0, sy1 = max(0, y0), min(W, y1)
+
+        patch = pgm[sx0:sx1, sy0:sy1]
+
+        pad_left = sx0 - x0
+        pad_right = x1 - sx1
+        pad_bottom = sy0 - y0
+        pad_top = y1 - sy1
+
+        if pad_left or pad_right or pad_bottom or pad_top:
+            patch = np.pad(
+                patch,
+                ((pad_left, pad_right), (pad_bottom, pad_top)),
+                mode="constant",
+                constant_values=1,
+            )
+
+        # In perceived_grid_map, free cells are 0 and unknown cells are 1.
+        free_mask = (patch == 0)
+        unknown_mask = (patch == 1)
+
+        unknown_neighbor = np.zeros_like(unknown_mask, dtype=bool)
+        unknown_neighbor[1:, :] |= unknown_mask[:-1, :]
+        unknown_neighbor[:-1, :] |= unknown_mask[1:, :]
+        unknown_neighbor[:, 1:] |= unknown_mask[:, :-1]
+        unknown_neighbor[:, :-1] |= unknown_mask[:, 1:]
+
+        frontier_mask = free_mask & unknown_neighbor
+        return float(frontier_mask.sum())
 
     def _update_metrics_once_per_step(self, world):
         """Compute and store metrics ONCE per env step.
@@ -241,6 +293,7 @@ class Scenario(BaseScenario):
             "new_cell_visits_team": int(new_cell_visits_team),
             "unsafe_ratio": float(unsafe_ratio),
             "reward_target_total": float(self._reward_target_total),
+            "reward_fine_search_total": float(self._reward_fine_search_total),
             "reward_region_total": float(self._reward_region_total),
             "reward_explore_total": float(self._reward_explore_total),
             "reward_safety_total": float(self._reward_safety_total),
@@ -259,7 +312,8 @@ class Scenario(BaseScenario):
 
         Stage B: Fine search (inside target region, target still not visible)
             - disable region_progress shaping
-            - use reward_fine_search to encourage discovering new cells inside the region
+            - disable shared exploration shaping
+            - use reward_fine_search to encourage expanding local frontier inside the region
 
         Stage C: Target pursuit (target becomes visible)
             - disable region_progress shaping
@@ -465,7 +519,8 @@ class Scenario(BaseScenario):
         # Stage B: fine search
         #   in_target_region and not has_visible_target
         #   -> region guidance is disabled
-        #   -> reward_fine_search encourages discovering new cells inside region
+        #   -> shared exploration shaping is disabled
+        #   -> reward_fine_search encourages expanding local frontier inside region
         #
         # Stage C: target pursuit
         #   has_visible_target
@@ -477,28 +532,46 @@ class Scenario(BaseScenario):
         # - This local reward provides stage-specific shaping and penalties.
         # =============================================================
 
+        # -------------------------------------------------------------
+        # 4.1 Shared reward terms
+        # -------------------------------------------------------------
+
         # Disable region-center shaping once the agent has entered the region
         # (Stage B) or once a concrete target is visible (Stage C).
         if has_visible_target or in_target_region:
             region_progress = 0.0
 
-        # Shared reward terms (can appear in multiple stages).
         reward_explore = W_INFO * info_gain + W_VISIBLE * (num_visible / float(total_anchors)) - W_STEP
+
+        # In Stage B, disable the shared exploration term and let frontier reward
+        # dominate local fine-search behavior.
+        if in_target_region and (not has_visible_target):
+            reward_explore = 0.0
+
         reward_region = W_REGION * float(region_progress)
         reward_collision = -W_COLLIDE * float(collisions)
         reward_safety = -W_UNSAFE * float(unsafe)
         reward_target = reward_visible_target + W_TARGET_DISCOVERY * reward_target_discovery
 
-        # Stage B only: encourage local scanning inside the region until a true
-        # target becomes visible.
+        # -------------------------------------------------------------
+        # 4.2 Stage-B specific reward: fine search inside target region
+        # -------------------------------------------------------------
         reward_fine_search = 0.0
         if in_target_region and (not has_visible_target):
-            reward_fine_search = W_FINE_SEARCH * info_gain
+            frontier_strength = self._compute_local_frontier_strength(agent, world, patch_radius=7)
+            prev_frontier = getattr(agent, "prev_frontier_strength", None)
+            if prev_frontier is None:
+                reward_fine_search = 0.0
+            else:
+                frontier_delta = frontier_strength - float(prev_frontier)
+                reward_fine_search = W_FINE_SEARCH * float(frontier_delta)
+            agent.prev_frontier_strength = float(frontier_strength)
+        else:
+            agent.prev_frontier_strength = None
 
-        # Stage A only: repeated-exploration penalty.
-        # Outside the target region, if the agent neither discovers new cells
-        # nor makes positive region progress, add an extra penalty to suppress
-        # useless wandering during coarse search.
+        # -------------------------------------------------------------
+        # 4.3 Stage-A specific reward: repeated-exploration penalty
+        # -------------------------------------------------------------
         reward_repeat = 0.0
         if (not has_visible_target) and (not in_target_region) and (new_free == 0) and (region_progress <= 0.0):
             reward_repeat = -(abs(reward_region) + W_REPEAT_MARGIN)
@@ -521,7 +594,8 @@ class Scenario(BaseScenario):
         self._reward_region_total += float(reward_region)
         self._reward_collision_total += float(reward_collision)
         self._reward_safety_total += float(reward_safety)
-        self._reward_target_total += float(reward_target + reward_fine_search)
+        self._reward_target_total += float(reward_target)
+        self._reward_fine_search_total += float(reward_fine_search)
         self._reward_repeat_total += float(reward_repeat)
 
         return float(rew)
@@ -730,11 +804,11 @@ class Scenario(BaseScenario):
 
         # target_tokens: [T, 5] = [x, y, found_flag, visible_flag, dist_to_nearest_agent]
         if (
-            n_targets > 0
-            and target_pos_vec.size == n_targets * 2
-            and target_found_vec.size == n_targets
-            and target_visible_any.size == n_targets
-            and nearest_agent_dist.size == n_targets
+                n_targets > 0
+                and target_pos_vec.size == n_targets * 2
+                and target_found_vec.size == n_targets
+                and target_visible_any.size == n_targets
+                and nearest_agent_dist.size == n_targets
         ):
             target_pos = target_pos_vec.reshape(n_targets, 2)
             target_found = target_found_vec.reshape(n_targets, 1)
