@@ -52,7 +52,7 @@ class UWBPlanningWorld(WorldMapMixin, WorldUWBMixIn, WorldTargetsMixIn):  # mult
         # =====================================================
         # Target regions & hidden goals (WorldTargetsMixIn)
         # =====================================================
-        self._init_target_members(num_targets=10, target_reach_dist_m=self.target_reach_dist_m)
+        self._init_target_members(num_targets=6, target_reach_dist_m=self.target_reach_dist_m)
 
         # unified map initialization
         self.map_init()

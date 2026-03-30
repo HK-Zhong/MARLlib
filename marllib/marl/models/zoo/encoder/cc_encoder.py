@@ -41,8 +41,18 @@ class CentralizedEncoder(nn.Module):
         self.custom_config = model_config["custom_model_config"]
         self.activation = model_config.get("fcnet_activation")
         self.num_agents = self.custom_config["num_agents"]
+        self.num_targets = 6
+
         self.local_obs_dim = 629
-        self.global_state_dim = 165
+        self.agent_token_dim = 5
+        self.target_token_dim = 5
+        self.global_aux_dim = 450  # visited_low(15x15) + grid_map_low(15x15)
+
+        self.global_state_dim = (
+            self.num_agents * self.agent_token_dim
+            + self.num_targets * self.target_token_dim
+            + self.global_aux_dim
+        )
 
         # encoder
         layers = []
@@ -64,6 +74,10 @@ class CentralizedEncoder(nn.Module):
             # each agent slice: [local_obs(self.local_obs_dim) | global_state(self.global_state_dim)]
             # encoder input should be: one shared global_state (self.global_state_dim)
             # + all agents' local observations (num_agents * self.local_obs_dim)
+            # global_state layout:
+            #   agent_tokens_flat = num_agents * 5
+            #   target_tokens_flat = num_targets * 5
+            #   global_aux_flat = 450
 
             input_dim = self.global_state_dim + self.num_agents * self.local_obs_dim
 
@@ -120,10 +134,10 @@ class CentralizedEncoder(nn.Module):
             x = self.encoder(x.permute(0, 3, 1, 2))
             output = torch.mean(x, (2, 3))
         else:
-            # Expected raw state shape: [B, num_agents, 671]
+            # Expected raw state shape: [B, num_agents, local_obs_dim + global_state_dim]
             # Split each agent slice into:
             #   local_obs   = [:self.local_obs_dim]
-            #   global_state = [self.local_obs_dim:671]
+            #   global_state = [self.local_obs_dim:self.local_obs_dim + self.global_state_dim]
             # We keep all agents' local observations, but only ONE shared global
             # state copy (take it from the first agent slice) to avoid repetition.
             local_obs = inputs[:, :, :self.local_obs_dim]  # [B, num_agents, self.local_obs_dim]
@@ -132,7 +146,7 @@ class CentralizedEncoder(nn.Module):
 
             local_obs = local_obs.reshape(local_obs.shape[0], -1)  # [B, num_agents * self.local_obs_dim]
             cc_encoder_input = torch.cat([local_obs, global_state], dim=1)
-            if not hasattr(self, "_debug_actor_printed"):  # [B, 3*self.local_obs_dim + self.global_state_dim]
+            if not hasattr(self, "_debug_actor_printed"):  # [B, num_agents*self.local_obs_dim + global_state_dim]
                 print("[CC_ENCODER] cc_encoder_input shape: ", cc_encoder_input.shape)
             output = self.encoder(cc_encoder_input)
             self._debug_actor_printed = True

@@ -31,8 +31,6 @@ class MyDualEncoder(nn.Module):
 
         # -------- dims --------
         self.actor_obs_dim = 629
-        # global_state_dim 不再在 encoder 中使用（由环境动态决定）
-        self.global_state_dim = None
         self.coarse_dim = 404
         self.fine_dim = 225
 

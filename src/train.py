@@ -26,24 +26,36 @@ mappo.fit(
     env, model,
     stop={'timesteps_total': timesteps_total},
     share_policy='group',
-    checkpoint_freq=100,
-    num_workers=8,
+    checkpoint_freq=10,
+    checkpoint_at_end=True,
+    num_workers=4,
     num_envs_per_worker=2,
     num_gpus=0,
     seed=42,
     evaluation_interval=10,
     evaluation_num_episodes=10,
     evaluation_config={"explore": False},
-    callbacks=UWBCustomMetricsCallbacks
-    # local_dir="/home/coolas-fly/MARLlib/nohup_results/ray_results",
+    callbacks=UWBCustomMetricsCallbacks,
 )
 
 # rendering
-# mappo.render(env, model,
-#              stop={'timesteps_total': 40000000},
-#              restore_path={'params_path': "checkpoint/params.json",  # experiment configuration
-#                            'model_path': "checkpoint/checkpoint-6250"},  # checkpoint path
-#              num_workers=10,
-#              local_mode=False,
-#              share_policy="all",
-#              checkpoint_end=True)
+# mappo.render(
+#     env, model,
+#     stop={'timesteps_total': 2 * timesteps_total},
+#     restore_path={
+#         # experiment configuration
+#         'params_path': "/home/coolas-fly/MARLlib/exp_results/mappo_mlp_Scenario1/Ours2_lr0.0001/params.json",
+#         # checkpoint path
+#         'model_path': "/home/coolas-fly/MARLlib/exp_results/mappo_mlp_Scenario1/New/checkpoint_000240/checkpoint-240"},
+#         share_policy='group',
+#         checkpoint_freq=10,
+#         checkpoint_at_end=True,
+#         num_workers=4,
+#         num_envs_per_worker=2,
+#         num_gpus=0,
+#         seed=42,
+#         evaluation_interval=10,
+#         evaluation_num_episodes=10,
+#         evaluation_config={"explore": False},
+#         callbacks=UWBCustomMetricsCallbacks,
+# )

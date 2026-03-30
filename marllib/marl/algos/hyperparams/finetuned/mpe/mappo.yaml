@@ -25,16 +25,16 @@
 # Detailed explanation for each hyperparameter can be found in ray/rllib/agents/ppo/ippo.py
 
 algo_args:
-  use_gae: True
-  lambda: 0.95
-  kl_coeff: 0.2
-  batch_episode: 64
-  num_sgd_iter: 10
-  vf_loss_coeff: 1.0
-  lr: 0.0003
-  entropy_coeff: 0.01
-  clip_param: 0.2
-  vf_clip_param: 20.0
-  batch_mode: "complete_episodes"
+  use_gae: True        # 是否使用 GAE（Generalized Advantage Estimation），用于降低方差
+  lambda: 0.98         # GAE 的 lambda 参数，控制 bias-variance tradeoff（越大越平滑）
+  kl_coeff: 0.15       # KL 散度惩罚系数，用于限制新旧策略差异（稳定训练）
+  batch_episode: 64    # 每次训练采样的 episode 数量（影响 batch size）
+  num_sgd_iter: 10      # 每个 batch 上进行多少轮 SGD 更新（过大会导致过拟合）
+  vf_loss_coeff: 1.0   # value function 损失权重（critic 的重要性）
+  lr: 0.0003           # 学习率（过大会不稳定，过小会学习慢）
+  entropy_coeff: 0.01 # 熵正则系数，控制探索强度（越大越随机）
+  clip_param: 0.15     # PPO clipping 参数，限制策略更新幅度（越小越稳定）
+  vf_clip_param: 15.0  # value function 的 clipping 范围，防止 value 爆炸
+  batch_mode: "complete_episodes"  # 按完整 episode 采样（适合 MARL，保证时序一致）
 
 
