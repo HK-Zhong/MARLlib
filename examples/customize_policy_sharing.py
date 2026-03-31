@@ -86,7 +86,7 @@ if __name__ == '__main__':
     # initialize env
     env = marl.make_env(environment_name="two_teams_smac", map_name="3m", abs_path="../../examples/config/env_config/two_teams_smac.yaml")
     # pick mappo algorithms
-    mappo = marl.algos.mappo(hyperparam_source="test")
+    mappo = marl.algos.marl_algo(hyperparam_source="test")
     # customize model
     model = marl.build_model(env, mappo, {"core_arch": "mlp", "encode_layer": "128-128"})
     # start learning

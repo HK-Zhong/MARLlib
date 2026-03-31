@@ -65,7 +65,7 @@ env = marl.make_env(environment_name="mpe", map_name="simple_spread", force_coop
 # env = marl.make_env(environment_name='smac', map_name='3m', difficulty="6", reward_scale_rate=15)
 
 # initialize algorithm and load hyperparameters
-mappo = marl.algos.mappo(hyperparam_source="mpe")
+mappo = marl.algos.marl_algo(hyperparam_source="mpe")
 
 # can add extra algorithm params. remember to check algo_config hyperparams before use
 # mappo = marl.algos.MAPPO(hyperparam_source='common', use_gae=True,  batch_episode=10, kl_coeff=0.2, num_sgd_iter=3)

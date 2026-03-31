@@ -6,7 +6,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = ""
 env = marl.make_env(environment_name="mpe", map_name="simple_spread", force_coop=True)
 
 # initialize algorithm and load hyperparameters
-mappo = marl.algos.mappo(hyperparam_source="mpe")
+mappo = marl.algos.marl_algo(hyperparam_source="mpe")
 
 # build agent model based on env + algorithms + user preference if checked available
 model = marl.build_model(env, mappo, {"core_arch": "mlp", "encode_layer": "128-256"})

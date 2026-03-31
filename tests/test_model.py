@@ -187,28 +187,28 @@ class TestBaseOnMPE(unittest.TestCase):
     
     def test_f11_mappo_cnn(self):
         env = marl.make_env(environment_name="magent", map_name="battlefield")
-        algo = marl.algos.mappo(hyperparam_source="test")
+        algo = marl.algos.marl_algo(hyperparam_source="test")
         model = marl.build_model(env, algo, {"core_arch": "mlp"})
         algo.fit(env, model, stop={"training_iteration": 1}, local_mode=True, num_gpus=0,
                  num_workers=2, share_policy="group", checkpoint_end=False)
     
     def test_f12_mappo_cnn(self):
         env = marl.make_env(environment_name="magent", map_name="battlefield")
-        algo = marl.algos.mappo(hyperparam_source="test")
+        algo = marl.algos.marl_algo(hyperparam_source="test")
         model = marl.build_model(env, algo, {"core_arch": "gru"})
         algo.fit(env, model, stop={"training_iteration": 1}, local_mode=True, num_gpus=0,
                  num_workers=2, share_policy="group", checkpoint_end=False)
     
     def test_f11_mappo_1d_encoder(self):
         env = marl.make_env(environment_name="mpe", map_name="simple_spread")
-        algo = marl.algos.mappo(hyperparam_source="test")
+        algo = marl.algos.marl_algo(hyperparam_source="test")
         model = marl.build_model(env, algo, {"core_arch": "mlp"})
         algo.fit(env, model, stop={"training_iteration": 1}, local_mode=True, num_gpus=0,
                  num_workers=2, share_policy="group", checkpoint_end=False)
 
     def test_f12_mappo_1d_encoder(self):
         env = marl.make_env(environment_name="mpe", map_name="simple_spread")
-        algo = marl.algos.mappo(hyperparam_source="test")
+        algo = marl.algos.marl_algo(hyperparam_source="test")
         model = marl.build_model(env, algo, {"core_arch": "gru"})
         algo.fit(env, model, stop={"training_iteration": 1}, local_mode=True, num_gpus=0,
                  num_workers=2, share_policy="group", checkpoint_end=False)

@@ -41,7 +41,7 @@ class CentralizedEncoder(nn.Module):
         self.custom_config = model_config["custom_model_config"]
         self.activation = model_config.get("fcnet_activation")
         self.num_agents = self.custom_config["num_agents"]
-        self.num_targets = 6
+        self.num_targets = 10
 
         self.local_obs_dim = 629
         self.agent_token_dim = 5

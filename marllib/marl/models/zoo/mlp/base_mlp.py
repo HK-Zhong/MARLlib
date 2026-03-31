@@ -30,6 +30,7 @@ from ray.rllib.utils.framework import try_import_torch
 from ray.rllib.utils.typing import Dict, TensorType, List
 from marllib.marl.models.zoo.encoder.base_encoder import BaseEncoder
 from marllib.marl.models.zoo.encoder.MyDualEncoder import MyDualEncoder
+from types import SimpleNamespace
 
 torch, nn = try_import_torch()
 
@@ -58,8 +59,10 @@ class BaseMLP(TorchModelV2, nn.Module):
         self.activation = model_config.get("fcnet_activation")
 
         # encoder
-        # print("self.full_obs_space: ", self.full_obs_space)  一个 agent 的完全观测（包含 global state）
-        self.p_encoder = MyDualEncoder(model_config, self.full_obs_space)
+        # actor only consumes the local observation slice, while critic still
+        # uses the full observation (local obs + global state).
+        actor_obs_space = {"obs": SimpleNamespace(shape=(self.local_obs_dim,))}
+        self.p_encoder = BaseEncoder(model_config, actor_obs_space)
         self.vf_encoder = BaseEncoder(model_config, self.full_obs_space)
 
         self.p_branch = nn.Sequential(

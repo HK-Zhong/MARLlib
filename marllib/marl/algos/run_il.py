@@ -133,7 +133,8 @@ def run_il(exp_info, env, model, stop=None):
         },
         "framework": exp_info["framework"],
         "evaluation_interval": exp_info["evaluation_interval"],
-        "simple_optimizer": False  # force using better optimizer
+        "simple_optimizer": False,  # force using better optimizer
+        "callbacks": exp_info["callbacks"],
     }
 
     stop_config = {

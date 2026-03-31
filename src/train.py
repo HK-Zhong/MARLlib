@@ -9,12 +9,13 @@ os.environ["CUDA_VISIBLE_DEVICES"] = ""
 env = marl.make_env(environment_name="uwb_planning_env", map_name="Scenario1")
 
 # initialize algorithm with appointed hyperparameters
-mappo = marl.algos.mappo(hyperparam_source='mpe')
-print(type(mappo))
+marl_algo = marl.algos.mappo(hyperparam_source='mpe')
+
+print(type(marl_algo))
 
 # build agent model based on env + algorithms + user preference
 # return: (model(deep learning model), model_config)
-model = marl.build_model(env, mappo,
+model = marl.build_model(env, marl_algo,
                          {"core_arch": "mlp", "encode_layer": "256-512"})
 
 # 输出一下model的内容（测试用）
@@ -22,7 +23,7 @@ model = marl.build_model(env, mappo,
 timesteps_total = 900000
 
 # start training
-mappo.fit(
+marl_algo.fit(
     env, model,
     stop={'timesteps_total': timesteps_total},
     share_policy='group',

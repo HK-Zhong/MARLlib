@@ -36,7 +36,7 @@ from ray import tune
 
 env = marl.make_env(environment_name="mpe", map_name="simple_spread", force_coop=True)
 
-mappo = marl.algos.mappo(hyperparam_source="test", lr=tune.grid_search([0.0005, 0.001]))
+mappo = marl.algos.marl_algo(hyperparam_source="test", lr=tune.grid_search([0.0005, 0.001]))
 
 model = marl.build_model(env, mappo, {"core_arch": "mlp", "encode_layer": tune.grid_search(["8-16", "16-32"])})
 

@@ -33,7 +33,7 @@ class TestBaseOnMAPPO(unittest.TestCase):
 
     def test_a1_mpe(self):
         env = marl.make_env(environment_name="mpe", map_name="simple_spread")
-        algo = marl.algos.mappo(hyperparam_source="test")
+        algo = marl.algos.marl_algo(hyperparam_source="test")
         model = marl.build_model(env, algo, {"core_arch": "mlp", "encode_layer": "8-8"})
         algo.fit(env, model, stop={"training_iteration": 1}, local_mode=True, num_gpus=0,
                  num_workers=2, share_policy="group", checkpoint_end=False)

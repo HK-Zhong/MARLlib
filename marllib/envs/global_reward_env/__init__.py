@@ -23,6 +23,13 @@
 COOP_ENV_REGISTRY = {}
 
 try:
+    from marllib.envs.base_env.uwb_planning_env import RLlibUWBPlanningEnv
+
+    COOP_ENV_REGISTRY["uwb_planning_env"] = RLlibUWBPlanningEnv
+except Exception as e:
+    COOP_ENV_REGISTRY["uwb_planning_env"] = str(e)
+
+try:
     from marllib.envs.global_reward_env.gymnasium_mamujoco_fcoop import RLlibGymnasiumRoboticsMAMujoco_FCOOP
     COOP_ENV_REGISTRY["gymnasium_mamujoco"] = RLlibGymnasiumRoboticsMAMujoco_FCOOP
 
