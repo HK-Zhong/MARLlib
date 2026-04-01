@@ -163,7 +163,7 @@ class MyDualEncoder(nn.Module):
 
         # -------- debug（只打印一次）--------
         if not hasattr(self, "_debug_printed"):
-            print("\n[DUAL ENCODER DEBUG]")
+            print("\n[MY DUAL ENCODER DEBUG]")
             print("actor_obs:", actor_obs.shape)
             print("coarse_input:", coarse_input.shape)
             print("fine_input:", fine_input.shape)
@@ -175,7 +175,7 @@ class MyDualEncoder(nn.Module):
             print("gate:", gate.shape)
             print("fused:", fused.shape)
             print("output:", output.shape)
-            print("\n[DUAL ENCODER DEBUG END]")
+            print("[MY DUAL ENCODER DEBUG END]")
             self._debug_printed = True
 
         return output

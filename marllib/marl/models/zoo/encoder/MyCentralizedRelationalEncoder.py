@@ -251,7 +251,7 @@ class MyCentralizedRelationalEncoder(nn.Module):
         # Debug print (only once)
         # ---------------------------------------------------------
         if not hasattr(self, "_debug_printed"):
-            print("\n[MY CC ENCODER DEBUG]")
+            print("\n[MY RELATIONAL ENCODER DEBUG]")
             print("inputs:", inputs.shape)
             print("local_obs:", local_obs.shape)
             print("global_state:", global_state.shape)
@@ -268,7 +268,7 @@ class MyCentralizedRelationalEncoder(nn.Module):
             print("global_aux_feat:", global_aux_feat.shape)
             print("fused:", fused.shape)
             print("output:", output.shape)
-            print("\n[MY CC ENCODER DEBUG END]")
+            print("[MY RELATIONAL ENCODER DEBUG END]")
 
             self._debug_printed = True
 
