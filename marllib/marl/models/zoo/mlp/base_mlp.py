@@ -62,7 +62,7 @@ class BaseMLP(TorchModelV2, nn.Module):
         # actor only consumes the local observation slice, while critic still
         # uses the full observation (local obs + global state).
         actor_obs_space = {"obs": SimpleNamespace(shape=(self.local_obs_dim,))}
-        self.p_encoder = MyDualEncoder(model_config, actor_obs_space)
+        self.p_encoder = BaseEncoder(model_config, actor_obs_space)
         self.vf_encoder = BaseEncoder(model_config, self.full_obs_space)
 
         self.p_branch = nn.Sequential(

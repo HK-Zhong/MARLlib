@@ -52,7 +52,7 @@ class CentralizedCriticMLP(BaseMLP):
                          name, **kwargs)
 
         # encoder for centralized VF
-        self.cc_vf_encoder = MyCentralizedRelationalEncoder(model_config, self.full_obs_space)
+        self.cc_vf_encoder = CentralizedEncoder(model_config, self.full_obs_space)
 
         # Central VF
         if self.custom_config["opp_action_in_cc"]:

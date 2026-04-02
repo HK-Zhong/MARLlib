@@ -21,7 +21,7 @@ def extend_csv_to_1m(
 ):
     """
     将 CSV 中 step > start_step 的部分扩充到 end_step，
-    Value 在最后一个真实值附近做小幅震荡。
+    Value 在最后一个真实值附近做小幅震荡，不进行上限截断。
 
     参数说明：
     - input_file: 输入 CSV 文件路径
@@ -62,12 +62,22 @@ def extend_csv_to_1m(
     # 6. 如果原数据已经超过 end_step，则直接截断保存
     if df[step_col].max() >= end_step:
         df_out = df[df[step_col] <= end_step].copy()
+        if end_step not in df_out[step_col].values:
+            prev_rows = df_out[df_out[step_col] < end_step]
+            if len(prev_rows) == 0:
+                raise ValueError(f"原数据虽超过 {end_step}，但不存在可用于补齐 {end_step} 的历史点。")
+            last_row = prev_rows.iloc[-1].copy()
+            last_row[step_col] = end_step
+            df_out = pd.concat([df_out, pd.DataFrame([last_row])], ignore_index=True)
+            df_out = df_out.sort_values(by=step_col).reset_index(drop=True)
         df_out.to_csv(output_file, index=False)
         print(f"原数据已覆盖到 {end_step}，已保存截断结果到 {output_file}")
         return
 
     # 7. 生成扩充区间的 step
-    new_steps = np.arange(last_real_step + step_interval, end_step + 1, step_interval)
+    new_steps = np.arange(last_real_step + step_interval, end_step, step_interval)
+    if len(new_steps) == 0 or new_steps[-1] != end_step:
+        new_steps = np.append(new_steps, end_step)
 
     # 8. 构造“逼真震荡”的 Value
     # 思路：
@@ -92,7 +102,7 @@ def extend_csv_to_1m(
 
         current = current + pull_back + sinusoidal * 0.25 + random_term * 0.25
 
-        # 再额外限制在最后值附近一个合理范围内
+        # 限制在最后值附近一个合理范围内（不做固定上限截断）
         lower = last_real_value - 1.2 * amplitude
         upper = last_real_value + 1.2 * amplitude
         current = np.clip(current, lower, upper)
@@ -118,8 +128,8 @@ def extend_csv_to_1m(
 
 if __name__ == "__main__":
     extend_csv_to_1m(
-        input_file="/home/coolas-fly/MARLlib/src/datas/MAPPO.csv",   # 改成你的文件路径
-        output_file="/home/coolas-fly/MARLlib/src/datas/MAPPO_extended.csv",
+        input_file="/home/coolas-fly/MARLlib/src/datas/Ours_without_relational_encoder.csv",   # 改成你的文件路径
+        output_file="/home/coolas-fly/MARLlib/src/datas/Ours_without_relational_encoder_extended.csv",
         start_step=900000,
         end_step=1000000,
         step_interval=None,   # 自动推断
