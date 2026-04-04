@@ -306,6 +306,9 @@ class Scenario(BaseScenario):
 
     def reward(self, agent, world):
         """
+
+        !!! Proposed Method 🌟🌟🌟!!!
+
         Three-stage local reward design.
 
         Stage A: Coarse search (outside target region, target not visible)
@@ -605,6 +608,9 @@ class Scenario(BaseScenario):
 
     # def reward(self, agent, world):
     #     """
+
+    #     !!! Ablation Study Method !!!
+
     #     Unified reward without explicit three-stage mechanism.
     #
     #     This version uses a single task-level reward throughout the whole episode.

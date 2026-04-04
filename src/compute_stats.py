@@ -40,6 +40,6 @@ def compute_value_stats(input_file, use_div7=False):
 
 if __name__ == "__main__":
     compute_value_stats(
-        input_file="/home/coolas-fly/MARLlib/src/datas/Overlap_ratio_Ours_evaluation.csv",
+        input_file="/home/coolas-fly/MARLlib/src/datas/Finish_time_Ours_without_relational_encoder_evaluation.csv",
         use_div7=False  # 改为 True 可输出除以7后的结果
     )
