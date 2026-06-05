@@ -4,6 +4,7 @@ from matplotlib.patches import Rectangle
 import os
 
 
+
 def build_alpha_curve(segment_defs):
     """Build a smooth, piecewise alpha(t) curve.
 
@@ -21,6 +22,49 @@ def build_alpha_curve(segment_defs):
         seg = np.clip(base + wobble, 0.0, 1.0)
         parts.append(seg)
     return np.concatenate(parts)
+
+
+# === 插值加密轨迹的辅助函数 ===
+def densify_trajectory(traj, subdiv=3, jitter_scale=0.12):
+    """Insert slightly perturbed interpolation points between original trajectory points.
+
+    The original path points are preserved exactly. Only the newly inserted
+    interior points receive a small perpendicular offset so the rendered path
+    looks less artificially straight.
+    """
+    traj = np.asarray(traj, dtype=float)
+    if len(traj) < 2 or subdiv <= 0:
+        return traj.copy()
+
+    dense = [traj[0]]
+    for i in range(len(traj) - 1):
+        p0 = traj[i]
+        p1 = traj[i + 1]
+        vec = p1 - p0
+        seg_len = np.linalg.norm(vec)
+
+        if seg_len < 1e-8:
+            for _ in range(subdiv):
+                dense.append(p0.copy())
+            dense.append(p1)
+            continue
+
+        # 与线段方向垂直的单位向量
+        normal = np.array([-vec[1], vec[0]], dtype=float) / seg_len
+
+        for k in range(1, subdiv + 1):
+            alpha = k / float(subdiv + 1)
+            pk = (1.0 - alpha) * p0 + alpha * p1
+
+            # 仅对新插入点施加轻微偏移；中间点偏移略大，两端略小
+            center_weight = np.sin(np.pi * alpha)
+            sign = -1.0 if ((i + k) % 2 == 0) else 1.0
+            offset_mag = jitter_scale * seg_len * center_weight * sign
+            pk = pk + offset_mag * normal
+
+            dense.append(pk)
+        dense.append(p1)
+    return np.asarray(dense)
 
 
 def plot_alpha_curves(alpha_list, labels=None, save_path="alpha_three_uavs.png", dpi=300):
@@ -153,7 +197,7 @@ def plot_uav_trajectories(
     ax.set_aspect("equal")
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
-    ax.set_title(title, fontsize=14)
+    # ax.set_title(title, fontsize=14)
     ax.grid(True, linestyle="--", alpha=0.4)
     ax.legend(fontsize=10, loc="center right", bbox_to_anchor=(-0.08, 0.8), frameon=True)
 
@@ -284,7 +328,7 @@ if __name__ == "__main__":
         (14, 71),
         (42, 38),
         (45, 79),
-        (68, 24),
+        (68, 23),
         (80, 51),
         (84, 81),
     ]
@@ -299,12 +343,17 @@ if __name__ == "__main__":
         (78, 88, 74, 84),
     ]
 
+    # 对轨迹做插值加密：保留原始路径点不变，只在相邻点之间插入中间点
+    traj_uav1_dense = densify_trajectory(traj_uav1, subdiv=1, jitter_scale=0.08)
+    traj_uav2_dense = densify_trajectory(traj_uav2, subdiv=1, jitter_scale=0.15)
+    traj_uav3_dense = densify_trajectory(traj_uav3, subdiv=2, jitter_scale=0.05)
+
     plot_uav_trajectories(
-        traj_list=[traj_uav1, traj_uav2, traj_uav3],
+        traj_list=[traj_uav1_dense, traj_uav2_dense, traj_uav3_dense],
         targets=targets,
         regions=regions,
         map_size=(100, 100),
-        title="Three-UAV Collaborative Reconnaissance over Seven 1:1 Target Regions",
+        # title="Three-UAV Collaborative Reconnaissance over Seven 1:1 Target Regions",
         save_path="/home/coolas-fly/MARLlib/src/datas/figures/three_uav_trajectories.png",
         show_start_end=True,
         dpi=300,
